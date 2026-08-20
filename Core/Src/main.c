@@ -27,7 +27,13 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "ssd1306.h"
+#include "fonts.h"
+#include "keypad.h"
+#include "sensors.h"
+#include "fsm.h"
+#include <stdio.h>
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -37,7 +43,9 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define PIR_WARMUP_MS         30000   /* Thời gian khởi động cảm biến PIR (30 giây) */
+#define REED_DEBOUNCE_MS      50      /* Chống dội tiếp điểm từ cửa (50ms) */
+#define PIR_DEBOUNCE_MS       200     /* Chống dội PIR (200ms) */
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -48,7 +56,34 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+/* Retarget printf qua UART1 */
+#ifdef __GNUC__
+int __io_putchar(int ch)
+#else
+int fputc(int ch, FILE *f)
+#endif
+{
+  HAL_UART_Transmit(&huart1, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
+  return ch;
+}
 
+/* Biến cảm biến Rung SW-420 (đã chuyển logic sang sensors.c) */
+uint32_t last_vib_window_tick = 0;
+uint32_t vib_alert_clear_tick = 0;
+
+/* Biến cảm biến Từ Cửa (Reed Switch) có Debounce */
+volatile uint8_t reed_triggered = 0;
+volatile uint32_t last_reed_tick = 0;
+uint8_t was_reed_triggered = 0; /* Lưu trạng thái cửa ở chu kỳ trước */
+
+/* Biến cảm biến Chuyển động PIR có Warm-up & Lọc giữ trạng thái (Hold Latch) */
+volatile uint8_t pir_triggered = 0;
+volatile uint32_t pir_hold_tick = 0;
+uint8_t was_pir_triggered = 0;
+uint8_t pir_warmup_done_logged = 0;
+
+/* Trạng thái phím vừa bấm */
+char last_key = '-';
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -59,7 +94,40 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+/**
+  * @brief  EXTI line detection callbacks for SW-420, Reed switch, PIR.
+  */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+  uint32_t now = HAL_GetTick();
 
+  /* 1. Cảm biến Rung SW-420: Chuyển logic đếm vào module sensors */
+  if (GPIO_Pin == VIR_IN_Pin)
+  {
+    Sensors_Vib_EXTI_Callback();
+  }
+  /* 2. Cảm biến Từ Cửa Reed: Chống dội tiếp điểm cơ khí 50ms */
+  else if (GPIO_Pin == REED_IN_Pin)
+  {
+    if (now - last_reed_tick >= REED_DEBOUNCE_MS)
+    {
+      last_reed_tick = now;
+      reed_triggered = (HAL_GPIO_ReadPin(REED_IN_GPIO_Port, REED_IN_Pin) == GPIO_PIN_SET) ? 1 : 0;
+    }
+  }
+  /* 3. Cảm biến Chuyển Động PIR: Khóa trong giai đoạn Warm-up 30s & Giữ trạng thái ổn định */
+  else if (GPIO_Pin == PIR_IN_Pin)
+  {
+    if (now >= PIR_WARMUP_MS)
+    {
+      if (HAL_GPIO_ReadPin(PIR_IN_GPIO_Port, PIR_IN_Pin) == GPIO_PIN_SET)
+      {
+        pir_triggered = 1;
+        pir_hold_tick = now + 1500; /* Khóa giữ trạng thái phát hiện ít nhất 1.5 giây */
+      }
+    }
+  }
+}
 /* USER CODE END 0 */
 
 /**
@@ -98,13 +166,118 @@ int main(void)
   MX_USART1_UART_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
+  /* Khởi tạo bàn phím ma trận Keypad 4x4 */
+  Keypad_Init();
 
+  /* Đọc trạng thái ban đầu của Cửa (Reed Switch) khi vừa cấp nguồn */
+  reed_triggered = (HAL_GPIO_ReadPin(REED_IN_GPIO_Port, REED_IN_Pin) == GPIO_PIN_SET) ? 1 : 0;
+  was_reed_triggered = reed_triggered;
+
+  /* Log khởi động qua UART1 */
+  printf("\r\n========================================\r\n");
+  printf("  INTRUSION ALARM SYSTEM - STM32F103\r\n");
+  printf("  Firmware Ver 2.0 (Debounced & Classified)\r\n");
+  printf("  PIR Warm-up Time: %d seconds...\r\n", PIR_WARMUP_MS / 1000);
+  printf("========================================\r\n");
+
+  /* Khởi tạo màn hình OLED SH1106 1.3 inch */
+  SSD1306_Init(&hi2c1);
+  SSD1306_Fill(SSD1306_COLOR_BLACK);
+  SSD1306_GotoXY(10, 8);
+  SSD1306_Puts("INTRUSION ALARM", &Font_7x10, SSD1306_COLOR_WHITE);
+  SSD1306_GotoXY(16, 26);
+  SSD1306_Puts("SYSTEM READY", &Font_7x10, SSD1306_COLOR_WHITE);
+  SSD1306_GotoXY(12, 44);
+  SSD1306_Puts("7-STATE FSM ACTIVE", &Font_7x10, SSD1306_COLOR_WHITE);
+  SSD1306_UpdateScreen();
+  HAL_Delay(1000);
+
+  /* Khởi tạo Máy trạng thái hữu hạn FSM 7 trạng thái */
+  FSM_Init();
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+    uint32_t now = HAL_GetTick();
+
+    /* --- TÁC VỤ 1: Quét phím Keypad 4x4 --- */
+    char key = Keypad_GetKey();
+    if (key != KEYPAD_NO_KEY)
+    {
+      last_key = key;
+      printf("[KEYPAD] Pressed: %c\r\n", key);
+
+      /* Bíp còi phản hồi ngắn 20ms nếu không ở trạng thái còi đang kêu */
+      if (FSM_GetState() != STATE_ALARM_EMERGE && FSM_GetState() != STATE_ENTRY_DELAY)
+      {
+        HAL_GPIO_WritePin(BUZ_GPIO_Port, BUZ_Pin, GPIO_PIN_SET);
+        HAL_Delay(20);
+        HAL_GPIO_WritePin(BUZ_GPIO_Port, BUZ_Pin, GPIO_PIN_RESET);
+      }
+    }
+
+    /* --- TÁC VỤ 2: Xử lý Cảm biến Từ Cửa (Reed Switch) --- */
+    if (reed_triggered == 0 && was_reed_triggered == 1)
+    {
+      /* Cửa vừa đóng: Reset xung do chấn động lúc sập cửa, bắt đầu giám sát rung */
+      Vibration_Reset();
+      printf("[SENSOR] REED: Door CLOSED. Vibration monitoring active.\r\n");
+    }
+    else if (reed_triggered == 1 && was_reed_triggered == 0)
+    {
+      printf("[SENSOR] REED: Door OPEN!\r\n");
+    }
+    was_reed_triggered = reed_triggered;
+
+    /* --- TÁC VỤ 3: Xử lý Cảm biến Thân nhiệt PIR (HC-SR501) --- */
+    if (now >= PIR_WARMUP_MS && !pir_warmup_done_logged)
+    {
+      pir_warmup_done_logged = 1;
+      printf("[SENSOR] PIR: Warm-up Complete (30s). Motion monitoring ACTIVE!\r\n");
+    }
+
+    /* Tự động xóa trạng thái PIR khi chân đã về mức LOW và đã hết thời gian hold */
+    if (pir_triggered && (now >= pir_hold_tick))
+    {
+      if (HAL_GPIO_ReadPin(PIR_IN_GPIO_Port, PIR_IN_Pin) == GPIO_PIN_RESET)
+      {
+        pir_triggered = 0;
+      }
+      else
+      {
+        /* Nếu người vẫn đang chuyển động trước cảm biến, gia hạn tiếp 1s */
+        pir_hold_tick = now + 1000;
+      }
+    }
+
+    if (pir_triggered == 1 && was_pir_triggered == 0)
+    {
+      printf("[SENSOR] PIR: Motion DETECTED!\r\n");
+    }
+    else if (pir_triggered == 0 && was_pir_triggered == 1)
+    {
+      printf("[SENSOR] PIR: Motion Ended (Quiet).\r\n");
+    }
+    was_pir_triggered = pir_triggered;
+
+    /* --- TÁC VỤ 4: Đánh giá cửa sổ phân loại rung SW-420 mỗi 1.0 giây --- */
+    if (now - last_vib_window_tick >= VIB_WINDOW_MS)
+    {
+      last_vib_window_tick = now;
+      /* Chỉ phân tích rung khi CỬA ĐANG ĐÓNG (reed_triggered == 0) */
+      Sensors_Process_Window(reed_triggered == 0);
+    }
+
+    /* --- TÁC VỤ 5: ĐIỀU PHỐI MÁY TRẠNG THÁI FSM 7 TRẠNG THÁI --- */
+    /* FSM sẽ tự động quản lý còi Buzzer, LED Heartbeat/Siren, OLED UI và chuyển trạng thái */
+    bool is_door_open = (reed_triggered == 1);
+    bool is_pir_active = (now >= PIR_WARMUP_MS && pir_triggered == 1);
+    VibLevel_t current_vib = Vibration_GetLevel();
+
+    FSM_Process(key, is_door_open, is_pir_active, current_vib);
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */

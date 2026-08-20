@@ -2,6 +2,8 @@
 build/
 Debug/
 Release/
+.cache/
+
 
 # Firmware outputs
 *.elf
