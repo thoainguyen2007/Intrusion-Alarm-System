@@ -39,4 +39,8 @@ SystemState_t FSM_GetState(void);
 const char* FSM_GetStateName(SystemState_t state);
 const char* FSM_GetPinBuffer(void);
 
+/* API điều khiển còi PWM phần cứng */
+void Buzzer_Init(void);
+void Buzzer_SetState(bool on);
+
 #endif /* __FSM_H */

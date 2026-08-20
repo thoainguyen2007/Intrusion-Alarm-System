@@ -8,15 +8,12 @@
  */
 #define CALIBRATION_MODE 0
 
-/* Các ngưỡng phân loại rung (Đã tinh chỉnh tăng độ nhạy) */
-#define VIB_NOISE_MAX 2  /* <= 2: Nhiễu nền, bỏ qua */
-#define VIB_LIGHT_MIN 3  /* 3 - 14: Rung nhẹ / va chạm nhẹ */
-#define VIB_HEAVY_MIN 20 /* >= 15: Rung mạnh / giật / Cạy phá */
-
-/* Các tham số thời gian */
-#define VIB_WINDOW_MS 1000 /* Cửa sổ đếm xung 1 giây */
-#define VIB_GLITCH_FILTER_MS                                                   \
-  2 /* Lọc chống nhiễu 2ms (bắt nhạy hơn xung va đập) */
+#define VIB_NOISE_MAX 4 /* <= 4: nhiễu nền, có vùng đệm an toàn */
+#define VIB_LIGHT_MIN                                                          \
+  6 /* 6-19: rung nhẹ, cách xa mức nhiễu nền tối thiểu 2 xung */
+#define VIB_HEAVY_MIN 20 /* giữ nguyên, đã hợp lý */
+#define VIB_WINDOW_MS 1000
+#define VIB_GLITCH_FILTER_MS 8 /* đủ lọc dội lò xo cơ khí thật (5-15ms) */
 
 typedef enum { VIB_NONE = 0, VIB_LIGHT, VIB_HEAVY } VibLevel_t;
 

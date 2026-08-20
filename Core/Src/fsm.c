@@ -1,10 +1,31 @@
 #include "fsm.h"
 #include "main.h"
+#include "tim.h"
 #include "ssd1306.h"
 #include "fonts.h"
 #include "fatfs.h"
 #include <stdio.h>
 #include <string.h>
+
+/* ==================================================================== */
+/*                    ĐIỀU KHIỂN CÒI BUZZER TIMER PWM (PA8)             */
+/* ==================================================================== */
+void Buzzer_Init(void)
+{
+    HAL_TIM_PWM_Stop(&htim1, TIM_CHANNEL_1);
+}
+
+void Buzzer_SetState(bool on)
+{
+    if (on)
+    {
+        HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
+    }
+    else
+    {
+        HAL_TIM_PWM_Stop(&htim1, TIM_CHANNEL_1);
+    }
+}
 
 /* ==================================================================== */
 /*                       BIẾN NỘI BỘ QUẢN LÝ FSM                        */
@@ -68,7 +89,8 @@ void FSM_Init(void)
     error_banner[0] = '\0';
     error_banner_timeout = 0;
 
-    HAL_GPIO_WritePin(BUZ_GPIO_Port, BUZ_Pin, GPIO_PIN_RESET);
+    Buzzer_Init();
+    Buzzer_SetState(false);
     HAL_GPIO_WritePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin, GPIO_PIN_SET); /* LED PC13 Tắt */
     
     printf("\r\n[FSM] System Initialized in state: %s\r\n", FSM_GetStateName(currentState));
@@ -112,7 +134,7 @@ static void FSM_Update_Outputs(uint32_t now)
     {
         case STATE_DISARM:
             /* Còi tắt. LED nháy nhịp tim chậm 0.5Hz (1000ms chu kỳ) */
-            HAL_GPIO_WritePin(BUZ_GPIO_Port, BUZ_Pin, GPIO_PIN_RESET);
+            Buzzer_SetState(false);
             if (now - last_led_tick >= 1000)
             {
                 last_led_tick = now;
@@ -125,11 +147,11 @@ static void FSM_Update_Outputs(uint32_t now)
             if (now - last_buz_tick >= 1000)
             {
                 last_buz_tick = now;
-                HAL_GPIO_WritePin(BUZ_GPIO_Port, BUZ_Pin, GPIO_PIN_SET);
+                Buzzer_SetState(true);
             }
             else if (now - last_buz_tick >= 100)
             {
-                HAL_GPIO_WritePin(BUZ_GPIO_Port, BUZ_Pin, GPIO_PIN_RESET);
+                Buzzer_SetState(false);
             }
             if (now - last_led_tick >= 500)
             {
@@ -140,7 +162,7 @@ static void FSM_Update_Outputs(uint32_t now)
 
         case STATE_ARMED:
             /* Còi tắt. LED nháy chớp ngắn tuần tra (50ms ON mỗi 1500ms) */
-            HAL_GPIO_WritePin(BUZ_GPIO_Port, BUZ_Pin, GPIO_PIN_RESET);
+            Buzzer_SetState(false);
             if (now - last_led_tick >= 1500)
             {
                 last_led_tick = now;
@@ -157,19 +179,19 @@ static void FSM_Update_Outputs(uint32_t now)
             if (now - last_buz_tick >= 250)
             {
                 last_buz_tick = now;
-                HAL_GPIO_WritePin(BUZ_GPIO_Port, BUZ_Pin, GPIO_PIN_SET);
+                Buzzer_SetState(true);
                 HAL_GPIO_WritePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin, GPIO_PIN_RESET);
             }
             else if (now - last_buz_tick >= 100)
             {
-                HAL_GPIO_WritePin(BUZ_GPIO_Port, BUZ_Pin, GPIO_PIN_RESET);
+                Buzzer_SetState(false);
                 HAL_GPIO_WritePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin, GPIO_PIN_SET);
             }
             break;
 
         case STATE_TEMP_DISARM:
             /* Còi tắt. LED chớp đúp 2 nhịp */
-            HAL_GPIO_WritePin(BUZ_GPIO_Port, BUZ_Pin, GPIO_PIN_RESET);
+            Buzzer_SetState(false);
             if (now - last_led_tick >= 1000)
             {
                 last_led_tick = now;
@@ -178,8 +200,8 @@ static void FSM_Update_Outputs(uint32_t now)
             break;
 
         case STATE_ALARM_EMERGE:
-            /* CÒI HÚ CỰC ĐẠI: Bật liên tục hoặc đảo nhịp cực nhanh (50ms). LED chớp 10Hz */
-            HAL_GPIO_WritePin(BUZ_GPIO_Port, BUZ_Pin, GPIO_PIN_SET);
+            /* CÒI HÚ CỰC ĐẠI: Bật liên tục bằng PWM. LED chớp 10Hz */
+            Buzzer_SetState(true);
             if (now - last_led_tick >= 50)
             {
                 last_led_tick = now;
@@ -192,11 +214,11 @@ static void FSM_Update_Outputs(uint32_t now)
             if (now - last_buz_tick >= 2000)
             {
                 last_buz_tick = now;
-                HAL_GPIO_WritePin(BUZ_GPIO_Port, BUZ_Pin, GPIO_PIN_SET);
+                Buzzer_SetState(true);
             }
             else if (now - last_buz_tick >= 1000)
             {
-                HAL_GPIO_WritePin(BUZ_GPIO_Port, BUZ_Pin, GPIO_PIN_RESET);
+                Buzzer_SetState(false);
             }
             if (now - last_led_tick >= 500)
             {
@@ -250,12 +272,12 @@ static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_motion, VibLe
         return;
     }
 
-    /* 3. Hiển thị nội dung chuyên biệt cho từng trạng thái */
+    /* 3. Hiển thị nội dung chuyên biệt cho từng trạng thái (< 18 ký tự/dòng) */
     switch (currentState)
     {
         case STATE_DISARM:
             SSD1306_GotoXY(2, 16);
-            SSD1306_Puts("Enter PIN + [#] to ARM", &Font_7x10, SSD1306_COLOR_WHITE);
+            SSD1306_Puts("PIN + [#] to ARM", &Font_7x10, SSD1306_COLOR_WHITE);
             SSD1306_GotoXY(2, 30);
             snprintf(buf, sizeof(buf), "PIN: [%s]", pin_display);
             SSD1306_Puts(buf, &Font_7x10, SSD1306_COLOR_WHITE);
@@ -270,19 +292,19 @@ static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_motion, VibLe
             uint32_t elapsed = now - state_start_tick;
             uint32_t remain = (elapsed < EXIT_DELAY_MS) ? ((EXIT_DELAY_MS - elapsed) / 1000) : 0;
             SSD1306_GotoXY(2, 16);
-            snprintf(buf, sizeof(buf), "LEAVING HOME: %lus", remain);
+            snprintf(buf, sizeof(buf), "LEAVE HOME: %2lus", remain);
             SSD1306_Puts(buf, &Font_7x10, SSD1306_COLOR_WHITE);
             SSD1306_GotoXY(2, 30);
-            snprintf(buf, sizeof(buf), "PIN:[%s] Door:%s", pin_display, door_open ? "OPEN" : "OK");
+            snprintf(buf, sizeof(buf), "PIN:[%s] Door:%-4s", pin_display, door_open ? "OPEN" : "OK");
             SSD1306_Puts(buf, &Font_7x10, SSD1306_COLOR_WHITE);
             SSD1306_GotoXY(2, 46);
-            SSD1306_Puts("PIN + [#] to CANCEL", &Font_7x10, SSD1306_COLOR_WHITE);
+            SSD1306_Puts("PIN+[#] to Cancel", &Font_7x10, SSD1306_COLOR_WHITE);
             break;
         }
 
         case STATE_ARMED:
             SSD1306_GotoXY(4, 16);
-            SSD1306_Puts("GUARDING ACTIVE 24/7", &Font_7x10, SSD1306_COLOR_WHITE);
+            SSD1306_Puts("SYSTEM ARMED 24/7", &Font_7x10, SSD1306_COLOR_WHITE);
             SSD1306_GotoXY(2, 30);
             snprintf(buf, sizeof(buf), "PIN: [%s]", pin_display);
             SSD1306_Puts(buf, &Font_7x10, SSD1306_COLOR_WHITE);
@@ -296,13 +318,13 @@ static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_motion, VibLe
             uint32_t elapsed = now - state_start_tick;
             uint32_t remain = (elapsed < ENTRY_DELAY_MS) ? ((ENTRY_DELAY_MS - elapsed) / 1000) : 0;
             SSD1306_GotoXY(2, 16);
-            snprintf(buf, sizeof(buf), "! ENTER PIN: %lus !", remain);
+            snprintf(buf, sizeof(buf), "ENTER PIN: %2lus", remain);
             SSD1306_Puts(buf, &Font_7x10, SSD1306_COLOR_WHITE);
             SSD1306_GotoXY(2, 30);
             snprintf(buf, sizeof(buf), "PIN: [%s]", pin_display);
             SSD1306_Puts(buf, &Font_7x10, SSD1306_COLOR_WHITE);
             SSD1306_GotoXY(2, 46);
-            SSD1306_Puts("Press [#] to Confirm", &Font_7x10, SSD1306_COLOR_WHITE);
+            SSD1306_Puts("Press [#] to OK", &Font_7x10, SSD1306_COLOR_WHITE);
             break;
         }
 
@@ -313,10 +335,10 @@ static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_motion, VibLe
             SSD1306_GotoXY(2, 16);
             SSD1306_Puts("WELCOME HOME (60s)", &Font_7x10, SSD1306_COLOR_WHITE);
             SSD1306_GotoXY(2, 30);
-            snprintf(buf, sizeof(buf), "Auto-Arm in: %lus", remain);
+            snprintf(buf, sizeof(buf), "Auto-Arm in: %2lus", remain);
             SSD1306_Puts(buf, &Font_7x10, SSD1306_COLOR_WHITE);
             SSD1306_GotoXY(2, 46);
-            snprintf(buf, sizeof(buf), "Door: %s (Please close)", door_open ? "OPEN" : "OK");
+            snprintf(buf, sizeof(buf), "Door:%-4s(Close it)", door_open ? "OPEN" : "OK");
             SSD1306_Puts(buf, &Font_7x10, SSD1306_COLOR_WHITE);
             break;
         }
@@ -328,7 +350,7 @@ static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_motion, VibLe
             snprintf(buf, sizeof(buf), "PIN: [%s]", pin_display);
             SSD1306_Puts(buf, &Font_7x10, SSD1306_COLOR_WHITE);
             SSD1306_GotoXY(2, 46);
-            SSD1306_Puts("ENTER PIN + [#] TO STOP", &Font_7x10, SSD1306_COLOR_WHITE);
+            SSD1306_Puts("PIN+[#] TO STOP!", &Font_7x10, SSD1306_COLOR_WHITE);
             break;
 
         case STATE_TEMP_ALARM:
@@ -336,12 +358,12 @@ static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_motion, VibLe
             uint32_t elapsed = now - state_start_tick;
             uint32_t remain = (elapsed < TEMP_ALARM_MS) ? ((TEMP_ALARM_MS - elapsed) / 1000) : 0;
             SSD1306_GotoXY(2, 16);
-            SSD1306_Puts("CHECKING AREA (30s)", &Font_7x10, SSD1306_COLOR_WHITE);
+            SSD1306_Puts("INSPECT AREA (30s)", &Font_7x10, SSD1306_COLOR_WHITE);
             SSD1306_GotoXY(2, 30);
-            snprintf(buf, sizeof(buf), "Time Left: %lus", remain);
+            snprintf(buf, sizeof(buf), "Time Left: %2lus", remain);
             SSD1306_Puts(buf, &Font_7x10, SSD1306_COLOR_WHITE);
             SSD1306_GotoXY(2, 46);
-            snprintf(buf, sizeof(buf), "Door: %s (Please close)", door_open ? "OPEN" : "OK");
+            snprintf(buf, sizeof(buf), "Door:%-4s(Close it)", door_open ? "OPEN" : "OK");
             SSD1306_Puts(buf, &Font_7x10, SSD1306_COLOR_WHITE);
             break;
         }
