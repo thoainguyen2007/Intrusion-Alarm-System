@@ -166,6 +166,9 @@ int main(void)
   MX_USART1_UART_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
+  /* Đăng ký filesystem FatFs cho thẻ nhớ MicroSD (Non-blocking delayed mount) */
+  f_mount(&USERFatFS, USERPath, 0);
+
   /* Khởi tạo bàn phím ma trận Keypad 4x4 */
   Keypad_Init();
 
@@ -209,12 +212,12 @@ int main(void)
       last_key = key;
       printf("[KEYPAD] Pressed: %c\r\n", key);
 
-      /* Bíp còi phản hồi ngắn 20ms nếu không ở trạng thái còi đang kêu */
+      /* Bíp còi PWM phản hồi ngắn nếu không ở trạng thái còi đang kêu */
       if (FSM_GetState() != STATE_ALARM_EMERGE && FSM_GetState() != STATE_ENTRY_DELAY)
       {
-        HAL_GPIO_WritePin(BUZ_GPIO_Port, BUZ_Pin, GPIO_PIN_SET);
-        HAL_Delay(20);
-        HAL_GPIO_WritePin(BUZ_GPIO_Port, BUZ_Pin, GPIO_PIN_RESET);
+        Buzzer_SetState(true);
+        HAL_Delay(10);
+        Buzzer_SetState(false);
       }
     }
 

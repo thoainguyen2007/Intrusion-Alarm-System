@@ -31,40 +31,48 @@ void Keypad_Init(void)
 }
 
 /**
-  * @brief  Scan Keypad and return pressed character or KEYPAD_NO_KEY
+  * @brief  Scan Keypad and return pressed character or KEYPAD_NO_KEY (Non-blocking)
   */
 char Keypad_GetKey(void)
 {
-    char key = KEYPAD_NO_KEY;
+    static char last_stable_key = KEYPAD_NO_KEY;
+    static char last_read_key = KEYPAD_NO_KEY;
+    static uint32_t last_debounce_tick = 0;
 
+    uint32_t now = HAL_GetTick();
+    char current_raw_key = KEYPAD_NO_KEY;
+
+    /* Quét nhanh qua 4 hàng và 4 cột */
     for (int r = 0; r < 4; r++) {
-        /* Set current row to LOW */
         HAL_GPIO_WritePin(ROW_PORTS[r], ROW_PINS[r], GPIO_PIN_RESET);
 
         for (int c = 0; c < 4; c++) {
-            /* Check if column is pulled LOW by key press */
             if (HAL_GPIO_ReadPin(COL_PORTS[c], COL_PINS[c]) == GPIO_PIN_RESET) {
-                /* 15ms Debounce */
-                HAL_Delay(15);
-                if (HAL_GPIO_ReadPin(COL_PORTS[c], COL_PINS[c]) == GPIO_PIN_RESET) {
-                    key = KEYMAP[r][c];
-
-                    /* Wait for key release with 300ms timeout */
-                    uint32_t timeout = HAL_GetTick();
-                    while ((HAL_GPIO_ReadPin(COL_PORTS[c], COL_PINS[c]) == GPIO_PIN_RESET) &&
-                           (HAL_GetTick() - timeout < 300)) {
-                        /* Non-blocking release wait up to 300ms */
-                    }
-
-                    /* Restore row to HIGH before exit */
-                    HAL_GPIO_WritePin(ROW_PORTS[r], ROW_PINS[r], GPIO_PIN_SET);
-                    return key;
-                }
+                current_raw_key = KEYMAP[r][c];
+                break;
             }
         }
 
-        /* Restore current row to HIGH */
         HAL_GPIO_WritePin(ROW_PORTS[r], ROW_PINS[r], GPIO_PIN_SET);
+        if (current_raw_key != KEYPAD_NO_KEY) {
+            break;
+        }
+    }
+
+    /* Khử rung phím (Debounce) 20ms hoàn toàn Non-blocking */
+    if (current_raw_key != last_read_key) {
+        last_read_key = current_raw_key;
+        last_debounce_tick = now;
+    }
+
+    if ((now - last_debounce_tick) >= 20) {
+        if (current_raw_key != last_stable_key) {
+            last_stable_key = current_raw_key;
+            /* Chỉ kích hoạt khi vừa nhấn phím xuống (Sườn xuống - Edge Triggered) */
+            if (last_stable_key != KEYPAD_NO_KEY) {
+                return last_stable_key;
+            }
+        }
     }
 
     return KEYPAD_NO_KEY;
