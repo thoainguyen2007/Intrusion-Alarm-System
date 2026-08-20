@@ -1,0 +1,39 @@
+# Build directories
+build/
+Debug/
+Release/
+
+# Firmware outputs
+*.elf
+*.bin
+*.hex
+*.map
+*.o
+*.d
+*.srec
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS junk
+Thumbs.db
+.DS_Store
+
+# CMake / generated
+CMakeCache.txt
+CMakeSettings.json
+cmake-build-*/
+!cmake/gcc-arm-none-eabi.cmake
+!cmake/starm-clang.cmake
+!cmake/stm32cubemx/CMakeLists.txt
+
+# STM32CubeIDE
+.settings/
+.launches/
+.mxproject
+
+# Logs
+*.log
