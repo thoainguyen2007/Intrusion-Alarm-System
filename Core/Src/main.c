@@ -32,6 +32,7 @@
 #include "keypad.h"
 #include "sensors.h"
 #include "fsm.h"
+#include "sd_spi.h"
 #include <stdio.h>
 #include <string.h>
 /* USER CODE END Includes */
@@ -182,6 +183,17 @@ int main(void)
   printf("  Firmware Ver 2.0 (Debounced & Classified)\r\n");
   printf("  PIR Warm-up Time: %d seconds...\r\n", PIR_WARMUP_MS / 1000);
   printf("========================================\r\n");
+
+  /* Probe the physical MicroSD interface before FatFs accesses the card. */
+  SD_SPI_ProbeResult_t sd_probe = SD_SPI_Probe();
+  printf("[SD] Probe: %s\r\n", SD_SPI_ProbeStatusString(sd_probe.status));
+  printf("[SD] CMD0 R1=0x%02X, CMD8 R1=0x%02X, R7=%02X %02X %02X %02X\r\n",
+         sd_probe.cmd0_r1,
+         sd_probe.cmd8_r1,
+         sd_probe.cmd8_data[0],
+         sd_probe.cmd8_data[1],
+         sd_probe.cmd8_data[2],
+         sd_probe.cmd8_data[3]);
 
   /* Khởi tạo màn hình OLED SH1106 1.3 inch */
   SSD1306_Init(&hi2c1);
