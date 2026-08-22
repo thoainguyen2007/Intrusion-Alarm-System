@@ -72,9 +72,10 @@ int fputc(int ch, FILE *f)
 uint32_t last_vib_window_tick = 0;
 uint32_t vib_alert_clear_tick = 0;
 
-/* Biến cảm biến Từ Cửa (Reed Switch) có Debounce */
-volatile uint8_t reed_triggered = 0;
-volatile uint32_t last_reed_tick = 0;
+/* EXTI chỉ đánh dấu cạnh; main xác nhận mức ổn định sau thời gian debounce. */
+uint8_t reed_triggered = 0;
+static volatile uint8_t reed_debounce_pending = 0;
+static volatile uint32_t reed_edge_tick = 0;
 uint8_t was_reed_triggered = 0; /* Lưu trạng thái cửa ở chu kỳ trước */
 
 /* Biến cảm biến Chuyển động PIR có Warm-up & Lọc giữ trạng thái (Hold Latch) */
@@ -111,11 +112,8 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
   /* 2. Cảm biến Từ Cửa Reed: Chống dội tiếp điểm cơ khí 50ms */
   else if (GPIO_Pin == REED_IN_Pin)
   {
-    if (now - last_reed_tick >= REED_DEBOUNCE_MS)
-    {
-      last_reed_tick = now;
-      reed_triggered = (HAL_GPIO_ReadPin(REED_IN_GPIO_Port, REED_IN_Pin) == GPIO_PIN_SET) ? 1 : 0;
-    }
+    reed_edge_tick = now;
+    reed_debounce_pending = 1U;
   }
   /* 3. Cảm biến Chuyển Động PIR: Khóa trong giai đoạn Warm-up 30s & Giữ trạng thái ổn định */
   else if (GPIO_Pin == PIR_IN_Pin)
@@ -129,6 +127,25 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
       }
     }
   }
+}
+
+static void Reed_ProcessDebounce(uint32_t now)
+{
+  uint8_t stable_state;
+  uint8_t update = 0U;
+  uint32_t primask = __get_PRIMASK();
+
+  __disable_irq();
+  if (reed_debounce_pending &&
+      (uint32_t)(now - reed_edge_tick) >= REED_DEBOUNCE_MS)
+  {
+    stable_state = (HAL_GPIO_ReadPin(REED_IN_GPIO_Port, REED_IN_Pin) == GPIO_PIN_SET) ? 1U : 0U;
+    reed_debounce_pending = 0U;
+    update = 1U;
+  }
+  __set_PRIMASK(primask);
+
+  if (update) reed_triggered = stable_state;
 }
 /* USER CODE END 0 */
 
@@ -279,6 +296,7 @@ int main(void)
     }
 
     /* --- TÁC VỤ 2: Xử lý Cảm biến Từ Cửa (Reed Switch) --- */
+    Reed_ProcessDebounce(now);
     if (reed_triggered == 0 && was_reed_triggered == 1)
     {
       /* Cửa vừa đóng: Reset xung do chấn động lúc sập cửa, bắt đầu giám sát rung */

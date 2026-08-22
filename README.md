@@ -168,7 +168,8 @@ Hệ thống hoạt động dựa trên mô hình Máy trạng thái hữu hạn
   5. Đặt lại `#define CALIBRATION_MODE 0` và nạp bản chạy thực tế.
 
 ### 5.2. Công Tắc Từ Cửa (Reed Switch) & Logic Ghép Nối (Coupling Logic)
-* Chống dội tiếp điểm cơ khí $50\text{ms}$ (`REED_DEBOUNCE_MS = 50`) trên `EXTI0`.
+* `EXTI0` chỉ ghi nhận thời điểm cạnh; main chỉ chấp nhận mức cửa sau khi chân ổn định
+  $50\text{ms}$ (`REED_DEBOUNCE_MS = 50`), tránh giữ nhầm trạng thái từ cạnh dội đầu tiên.
 * **Logic thông minh kết hợp:**
   * **Cửa Đóng (`Reed == 0`):** Tự động gọi `Vibration_Reset()` xóa sạch chấn động lúc sập cửa $\rightarrow$ Bật chế độ giám sát rung.
   * **Cửa Mở (`Reed == 1`):** Ngắt phân tích rung để tránh hiện tượng gió lùa đập cánh cửa gây báo động rung giả.
