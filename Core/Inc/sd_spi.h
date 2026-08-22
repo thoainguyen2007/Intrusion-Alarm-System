@@ -27,12 +27,19 @@ typedef struct {
     uint8_t last_r1;
 } SD_SPI_CardInfo_t;
 
+typedef struct {
+    uint32_t ff_bytes;
+    uint32_t zero_bytes;
+    uint32_t other_bytes;
+} SD_SPI_BusStats_t;
+
 SD_SPI_Result_t SD_SPI_InitCard(void);
 SD_SPI_Result_t SD_SPI_ReadBlock(uint32_t sector, uint8_t *buffer);
 SD_SPI_Result_t SD_SPI_WriteBlock(uint32_t sector, const uint8_t *buffer);
 SD_SPI_Result_t SD_SPI_Sync(void);
 bool SD_SPI_IsReady(void);
 const SD_SPI_CardInfo_t *SD_SPI_GetCardInfo(void);
+const SD_SPI_BusStats_t *SD_SPI_GetBusStats(void);
 const char *SD_SPI_ResultString(SD_SPI_Result_t result);
 const char *SD_SPI_CardTypeString(SD_SPI_CardType_t type);
 

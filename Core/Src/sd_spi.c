@@ -3,10 +3,12 @@
 #include "spi.h"
 
 #define BYTE_TIMEOUT_MS 100U
-#define INIT_TIMEOUT_MS 1500U
+#define POWER_STABILIZE_MS 250U
+#define CMD0_TIMEOUT_MS 1000U
+#define INIT_TIMEOUT_MS 2000U
 #define READ_TIMEOUT_MS 300U
 #define WRITE_TIMEOUT_MS 600U
-#define RESPONSE_POLLS 16U
+#define RESPONSE_POLLS 32U
 #define CMD0 0U
 #define CMD8 8U
 #define CMD16 16U
@@ -21,10 +23,20 @@
 #define DATA_ACCEPTED 0x05U
 
 static SD_SPI_CardInfo_t card = {false, SD_SPI_CARD_NONE, 0U, 0xFFU};
+static SD_SPI_BusStats_t bus_stats = {0U, 0U, 0U};
+
+static void record_rx(uint8_t value)
+{
+    if (value == 0xFFU) ++bus_stats.ff_bytes;
+    else if (value == 0x00U) ++bus_stats.zero_bytes;
+    else ++bus_stats.other_bytes;
+}
 
 static HAL_StatusTypeDef transfer(uint8_t tx, uint8_t *rx)
 {
-    return HAL_SPI_TransmitReceive(&hspi1, &tx, rx, 1U, BYTE_TIMEOUT_MS);
+    HAL_StatusTypeDef status = HAL_SPI_TransmitReceive(&hspi1, &tx, rx, 1U, BYTE_TIMEOUT_MS);
+    if (status == HAL_OK) record_rx(*rx);
+    return status;
 }
 
 static void deselect(void)
@@ -98,7 +110,8 @@ static SD_SPI_Result_t idle_clocks(void)
 {
     uint8_t rx;
     HAL_GPIO_WritePin(CS_GPIO_Port, CS_Pin, GPIO_PIN_SET);
-    for (uint8_t i = 0U; i < 10U; ++i)
+    /* At least 74 clocks are required with CS high; extra clocks are harmless. */
+    for (uint8_t i = 0U; i < 20U; ++i)
         if (transfer(0xFFU, &rx) != HAL_OK) return SD_SPI_HAL_ERROR;
     return SD_SPI_OK;
 }
@@ -139,19 +152,23 @@ SD_SPI_Result_t SD_SPI_InitCard(void)
     uint8_t r1 = 0xFFU, response[4];
     bool v2 = false;
     card = (SD_SPI_CardInfo_t){false, SD_SPI_CARD_NONE, 0U, 0xFFU};
+    bus_stats = (SD_SPI_BusStats_t){0U, 0U, 0U};
 
     result = set_prescaler(SPI_BAUDRATEPRESCALER_256);
     if (result != SD_SPI_OK) return result;
-    HAL_Delay(2U);
+    /* The adapter's AMS1117 and the card need time to reach a stable supply. */
+    HAL_GPIO_WritePin(CS_GPIO_Port, CS_Pin, GPIO_PIN_SET);
+    HAL_Delay(POWER_STABILIZE_MS);
     result = idle_clocks();
     if (result != SD_SPI_OK) return result;
 
-    for (uint8_t attempt = 0U; attempt < 10U; ++attempt) {
+    uint32_t cmd0_start = HAL_GetTick();
+    do {
         result = command(CMD0, 0U, 0x95U, &r1);
         deselect();
         if (result == SD_SPI_OK && r1 == R1_IDLE) break;
-        HAL_Delay(2U);
-    }
+        HAL_Delay(10U);
+    } while ((HAL_GetTick() - cmd0_start) < CMD0_TIMEOUT_MS);
     if (result == SD_SPI_NO_RESPONSE) return result;
     if (result != SD_SPI_OK || r1 != R1_IDLE) return SD_SPI_CMD0_ERROR;
 
@@ -254,6 +271,7 @@ SD_SPI_Result_t SD_SPI_Sync(void)
 
 bool SD_SPI_IsReady(void) { return card.initialized; }
 const SD_SPI_CardInfo_t *SD_SPI_GetCardInfo(void) { return &card; }
+const SD_SPI_BusStats_t *SD_SPI_GetBusStats(void) { return &bus_stats; }
 
 const char *SD_SPI_ResultString(SD_SPI_Result_t result)
 {

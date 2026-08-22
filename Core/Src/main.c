@@ -189,6 +189,17 @@ int main(void)
   SD_SPI_Result_t sd_result = SD_SPI_InitCard();
   printf("[SD] Init: %s (R1=0x%02X)\r\n",
          SD_SPI_ResultString(sd_result), SD_SPI_GetCardInfo()->last_r1);
+  printf("[SD] SPI RX bytes: FF=%lu, 00=%lu, other=%lu\r\n",
+         SD_SPI_GetBusStats()->ff_bytes,
+         SD_SPI_GetBusStats()->zero_bytes,
+         SD_SPI_GetBusStats()->other_bytes);
+  if (sd_result == SD_SPI_NO_RESPONSE &&
+      SD_SPI_GetBusStats()->ff_bytes != 0U &&
+      SD_SPI_GetBusStats()->zero_bytes == 0U &&
+      SD_SPI_GetBusStats()->other_bytes == 0U)
+  {
+    printf("[SD] DIAG: MISO stayed HIGH; check PA6/module DO, 5V input and 3.3V regulator output.\r\n");
+  }
   if (sd_result == SD_SPI_OK)
   {
     printf("[SD] Type: %s, OCR=0x%08lX\r\n",
