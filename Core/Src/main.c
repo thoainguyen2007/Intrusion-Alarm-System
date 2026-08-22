@@ -32,6 +32,7 @@
 #include "keypad.h"
 #include "sensors.h"
 #include "fsm.h"
+#include "sd_spi.h"
 #include <stdio.h>
 #include <string.h>
 /* USER CODE END Includes */
@@ -84,6 +85,7 @@ uint8_t pir_warmup_done_logged = 0;
 
 /* Trạng thái phím vừa bấm */
 char last_key = '-';
+static uint8_t sd_sector_buffer[SD_SPI_BLOCK_SIZE];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -166,7 +168,7 @@ int main(void)
   MX_USART1_UART_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
-  /* Đăng ký filesystem FatFs cho thẻ nhớ MicroSD (Non-blocking delayed mount) */
+  /* Đăng ký FatFs; việc truy cập vật lý được hoãn đến lúc mount chủ động. */
   f_mount(&USERFatFS, USERPath, 0);
 
   /* Khởi tạo bàn phím ma trận Keypad 4x4 */
@@ -182,6 +184,61 @@ int main(void)
   printf("  Firmware Ver 2.0 (Debounced & Classified)\r\n");
   printf("  PIR Warm-up Time: %d seconds...\r\n", PIR_WARMUP_MS / 1000);
   printf("========================================\r\n");
+
+  /* Initialize the card and read sector 0 without modifying it. */
+  SD_SPI_Result_t sd_result = SD_SPI_InitCard();
+  printf("[SD] Init: %s (R1=0x%02X)\r\n",
+         SD_SPI_ResultString(sd_result), SD_SPI_GetCardInfo()->last_r1);
+  printf("[SD] SPI RX bytes: FF=%lu, 00=%lu, other=%lu\r\n",
+         SD_SPI_GetBusStats()->ff_bytes,
+         SD_SPI_GetBusStats()->zero_bytes,
+         SD_SPI_GetBusStats()->other_bytes);
+  if (sd_result == SD_SPI_NO_RESPONSE &&
+      SD_SPI_GetBusStats()->ff_bytes != 0U &&
+      SD_SPI_GetBusStats()->zero_bytes == 0U &&
+      SD_SPI_GetBusStats()->other_bytes == 0U)
+  {
+    printf("[SD] DIAG: MISO stayed HIGH; check PA6/module DO, 5V input and 3.3V regulator output.\r\n");
+  }
+  if (sd_result == SD_SPI_OK)
+  {
+    printf("[SD] Type: %s, OCR=0x%08lX\r\n",
+           SD_SPI_CardTypeString(SD_SPI_GetCardInfo()->type),
+           SD_SPI_GetCardInfo()->ocr);
+    sd_result = SD_SPI_ReadBlock(0U, sd_sector_buffer);
+    printf("[SD] Read sector 0: %s\r\n", SD_SPI_ResultString(sd_result));
+    if (sd_result == SD_SPI_OK)
+    {
+      printf("[SD] First bytes: %02X %02X %02X %02X, signature: %02X %02X\r\n",
+             sd_sector_buffer[0], sd_sector_buffer[1],
+             sd_sector_buffer[2], sd_sector_buffer[3],
+             sd_sector_buffer[510], sd_sector_buffer[511]);
+    }
+
+    FRESULT mount_result = f_mount(&USERFatFS, USERPath, 1);
+    printf("[FATFS] Mount: %s (FR=%u)\r\n",
+           (mount_result == FR_OK) ? "OK" : "FAILED",
+           (unsigned int)mount_result);
+    if (mount_result == FR_OK)
+    {
+      DWORD free_clusters;
+      FATFS *mounted_fs;
+      FRESULT free_result = f_getfree(USERPath, &free_clusters, &mounted_fs);
+      if (free_result == FR_OK)
+      {
+        uint32_t total_kib = (uint32_t)((mounted_fs->n_fatent - 2U) *
+                             mounted_fs->csize / 2U);
+        uint32_t free_kib = (uint32_t)(free_clusters * mounted_fs->csize / 2U);
+        printf("[FATFS] Capacity: %lu KiB, free: %lu KiB\r\n",
+               total_kib, free_kib);
+      }
+      else
+      {
+        printf("[FATFS] Space query failed (FR=%u)\r\n",
+               (unsigned int)free_result);
+      }
+    }
+  }
 
   /* Khởi tạo màn hình OLED SH1106 1.3 inch */
   SSD1306_Init(&hi2c1);

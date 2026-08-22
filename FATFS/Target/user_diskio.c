@@ -35,6 +35,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include <string.h>
 #include "ff_gen_drv.h"
+#include "sd_spi.h"
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
@@ -81,7 +82,11 @@ DSTATUS USER_initialize (
 )
 {
   /* USER CODE BEGIN INIT */
-    Stat = STA_NOINIT;
+    if (pdrv != 0U) return STA_NOINIT;
+    if (SD_SPI_IsReady() || SD_SPI_InitCard() == SD_SPI_OK)
+      Stat &= (DSTATUS)~STA_NOINIT;
+    else
+      Stat |= STA_NOINIT;
     return Stat;
   /* USER CODE END INIT */
 }
@@ -96,7 +101,8 @@ DSTATUS USER_status (
 )
 {
   /* USER CODE BEGIN STATUS */
-    Stat = STA_NOINIT;
+    if (pdrv != 0U || !SD_SPI_IsReady()) Stat |= STA_NOINIT;
+    else Stat &= (DSTATUS)~STA_NOINIT;
     return Stat;
   /* USER CODE END STATUS */
 }
@@ -117,6 +123,13 @@ DRESULT USER_read (
 )
 {
   /* USER CODE BEGIN READ */
+    if (pdrv != 0U || buff == NULL || count == 0U ||
+        sector > UINT32_MAX - (count - 1U)) return RES_PARERR;
+    if (!SD_SPI_IsReady()) return RES_NOTRDY;
+    for (UINT i = 0U; i < count; ++i)
+      if (SD_SPI_ReadBlock((uint32_t)sector + i,
+                           buff + (i * SD_SPI_BLOCK_SIZE)) != SD_SPI_OK)
+        return RES_ERROR;
     return RES_OK;
   /* USER CODE END READ */
 }
@@ -138,7 +151,13 @@ DRESULT USER_write (
 )
 {
   /* USER CODE BEGIN WRITE */
-  /* USER CODE HERE */
+    if (pdrv != 0U || buff == NULL || count == 0U ||
+        sector > UINT32_MAX - (count - 1U)) return RES_PARERR;
+    if (!SD_SPI_IsReady()) return RES_NOTRDY;
+    for (UINT i = 0U; i < count; ++i)
+      if (SD_SPI_WriteBlock((uint32_t)sector + i,
+                            buff + (i * SD_SPI_BLOCK_SIZE)) != SD_SPI_OK)
+        return RES_ERROR;
     return RES_OK;
   /* USER CODE END WRITE */
 }
@@ -159,8 +178,26 @@ DRESULT USER_ioctl (
 )
 {
   /* USER CODE BEGIN IOCTL */
-    DRESULT res = RES_ERROR;
-    return res;
+    if (pdrv != 0U) return RES_PARERR;
+    if (!SD_SPI_IsReady()) return RES_NOTRDY;
+    switch (cmd)
+    {
+      case CTRL_SYNC:
+        return (SD_SPI_Sync() == SD_SPI_OK) ? RES_OK : RES_ERROR;
+      case GET_SECTOR_COUNT:
+        if (buff == NULL) return RES_PARERR;
+        return (SD_SPI_GetSectorCount((uint32_t *)buff) == SD_SPI_OK) ? RES_OK : RES_ERROR;
+      case GET_SECTOR_SIZE:
+        if (buff == NULL) return RES_PARERR;
+        *(WORD *)buff = SD_SPI_BLOCK_SIZE;
+        return RES_OK;
+      case GET_BLOCK_SIZE:
+        if (buff == NULL) return RES_PARERR;
+        *(DWORD *)buff = 1U;
+        return RES_OK;
+      default:
+        return RES_PARERR;
+    }
   /* USER CODE END IOCTL */
 }
 #endif /* _USE_IOCTL == 1 */

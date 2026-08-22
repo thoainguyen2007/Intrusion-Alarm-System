@@ -49,6 +49,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/keypad.c
     Core/Src/sensors.c
     Core/Src/fsm.c
+    Core/Src/sd_spi.c
 )
 
 # Add include paths

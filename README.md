@@ -59,6 +59,19 @@ Toàn bộ sơ đồ chân được cấu hình chuẩn trên STM32F103C8T6:
 | **Màn Hình OLED** | OLED 1.3" SH1106 / 0.96" SSD1306 | **`PB6`** (SCL), **`PB7`** (SDA) | `I2C1_SCL`, `I2C1_SDA` (Fast Mode 400kHz) | Hiển thị giao diện UI đa màn hình |
 | **LED Trạng Thái** | Onboard LED | **`PC13`** | `GPIO_Output_OD` (Active-Low) | Đèn báo nhịp tim hệ thống (Heartbeat 500ms) |
 
+Module MicroSD 6 chân dùng trong dự án được nối theo thứ tự chức năng:
+
+```text
+Module CS   -> PA4       Module SCK  -> PA5
+Module MOSI -> PA7       Module MISO -> PA6
+Module VCC  -> nguồn 5 V thật
+Module GND  -> GND chung với STM32 và USB-UART
+```
+
+Module dạng Catalex có AMS1117-3.3 phải được cấp vào chân `VCC` bằng nguồn 5 V
+đã đo xác nhận; không cấp 3.3 V qua AMS1117 và không dùng chân `5VIN` chưa xác
+minh là ngõ ra. Chi tiết đo kiểm và chẩn đoán nằm trong [`moduleSD.md`](moduleSD.md).
+
 ---
 
 ## 3. THIẾT KẾ MÁY TRẠNG THÁI HỮU HẠN (7-STATE FSM)
