@@ -33,6 +33,7 @@
 #include "sensors.h"
 #include "fsm.h"
 #include "sd_spi.h"
+#include "time_utils.h"
 #include <stdio.h>
 #include <string.h>
 /* USER CODE END Includes */
@@ -82,7 +83,7 @@ uint8_t was_reed_triggered = 0; /* Lưu trạng thái cửa ở chu kỳ trướ
 volatile uint8_t pir_triggered = 0;
 volatile uint32_t pir_hold_tick = 0;
 uint8_t was_pir_triggered = 0;
-uint8_t pir_warmup_done_logged = 0;
+static volatile uint8_t pir_ready = 0;
 
 /* Trạng thái phím vừa bấm */
 char last_key = '-';
@@ -118,7 +119,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
   /* 3. Cảm biến Chuyển Động PIR: Khóa trong giai đoạn Warm-up 30s & Giữ trạng thái ổn định */
   else if (GPIO_Pin == PIR_IN_Pin)
   {
-    if (now >= PIR_WARMUP_MS)
+    if (pir_ready)
     {
       if (HAL_GPIO_ReadPin(PIR_IN_GPIO_Port, PIR_IN_Pin) == GPIO_PIN_SET)
       {
@@ -137,7 +138,7 @@ static void Reed_ProcessDebounce(uint32_t now)
 
   __disable_irq();
   if (reed_debounce_pending &&
-      (uint32_t)(now - reed_edge_tick) >= REED_DEBOUNCE_MS)
+      Time_HasElapsed(now, reed_edge_tick, REED_DEBOUNCE_MS))
   {
     stable_state = (HAL_GPIO_ReadPin(REED_IN_GPIO_Port, REED_IN_Pin) == GPIO_PIN_SET) ? 1U : 0U;
     reed_debounce_pending = 0U;
@@ -310,14 +311,14 @@ int main(void)
     was_reed_triggered = reed_triggered;
 
     /* --- TÁC VỤ 3: Xử lý Cảm biến Thân nhiệt PIR (HC-SR501) --- */
-    if (now >= PIR_WARMUP_MS && !pir_warmup_done_logged)
+    if (!pir_ready && Time_HasElapsed(now, 0U, PIR_WARMUP_MS))
     {
-      pir_warmup_done_logged = 1;
+      pir_ready = 1U;
       printf("[SENSOR] PIR: Warm-up Complete (30s). Motion monitoring ACTIVE!\r\n");
     }
 
     /* Tự động xóa trạng thái PIR khi chân đã về mức LOW và đã hết thời gian hold */
-    if (pir_triggered && (now >= pir_hold_tick))
+    if (pir_triggered && Time_DeadlineReached(now, pir_hold_tick))
     {
       if (HAL_GPIO_ReadPin(PIR_IN_GPIO_Port, PIR_IN_Pin) == GPIO_PIN_RESET)
       {
@@ -341,7 +342,7 @@ int main(void)
     was_pir_triggered = pir_triggered;
 
     /* --- TÁC VỤ 4: Đánh giá cửa sổ phân loại rung SW-420 mỗi 1.0 giây --- */
-    if (now - last_vib_window_tick >= VIB_WINDOW_MS)
+    if (Time_HasElapsed(now, last_vib_window_tick, VIB_WINDOW_MS))
     {
       last_vib_window_tick = now;
       /* Chỉ phân tích rung khi CỬA ĐANG ĐÓNG (reed_triggered == 0) */
@@ -351,7 +352,7 @@ int main(void)
     /* --- TÁC VỤ 5: ĐIỀU PHỐI MÁY TRẠNG THÁI FSM 7 TRẠNG THÁI --- */
     /* FSM sẽ tự động quản lý còi Buzzer, LED Heartbeat/Siren, OLED UI và chuyển trạng thái */
     bool is_door_open = (reed_triggered == 1);
-    bool is_pir_active = (now >= PIR_WARMUP_MS && pir_triggered == 1);
+    bool is_pir_active = (pir_ready && pir_triggered == 1);
     VibLevel_t current_vib = Vibration_GetLevel();
 
     FSM_Process(key, is_door_open, is_pir_active, current_vib);

@@ -4,6 +4,7 @@
 #include "ssd1306.h"
 #include "fonts.h"
 #include "fatfs.h"
+#include "time_utils.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -154,7 +155,7 @@ static void FSM_Update_Outputs(uint32_t now)
         case STATE_DISARM:
             /* Còi tắt. LED nháy nhịp tim chậm 0.5Hz (1000ms chu kỳ) */
             Buzzer_SetState(false);
-            if (now - last_led_tick >= 1000)
+            if (Time_HasElapsed(now, last_led_tick, 1000U))
             {
                 last_led_tick = now;
                 HAL_GPIO_TogglePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin);
@@ -163,16 +164,16 @@ static void FSM_Update_Outputs(uint32_t now)
 
         case STATE_EXIT_DELAY:
             /* Còi bíp chậm 1Hz (100ms ON / 900ms OFF). LED nhấp nháy 1Hz */
-            if (now - last_buz_tick >= 1000)
+            if (Time_HasElapsed(now, last_buz_tick, 1000U))
             {
                 last_buz_tick = now;
                 Buzzer_SetState(true);
             }
-            else if (now - last_buz_tick >= 100)
+            else if (Time_HasElapsed(now, last_buz_tick, 100U))
             {
                 Buzzer_SetState(false);
             }
-            if (now - last_led_tick >= 500)
+            if (Time_HasElapsed(now, last_led_tick, 500U))
             {
                 last_led_tick = now;
                 HAL_GPIO_TogglePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin);
@@ -182,12 +183,12 @@ static void FSM_Update_Outputs(uint32_t now)
         case STATE_ARMED:
             /* Còi tắt. LED nháy chớp ngắn tuần tra (50ms ON mỗi 1500ms) */
             Buzzer_SetState(false);
-            if (now - last_led_tick >= 1500)
+            if (Time_HasElapsed(now, last_led_tick, 1500U))
             {
                 last_led_tick = now;
                 HAL_GPIO_WritePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin, GPIO_PIN_RESET); /* BẬT LED */
             }
-            else if (now - last_led_tick >= 50)
+            else if (Time_HasElapsed(now, last_led_tick, 50U))
             {
                 HAL_GPIO_WritePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin, GPIO_PIN_SET);   /* TẮT LED */
             }
@@ -195,13 +196,13 @@ static void FSM_Update_Outputs(uint32_t now)
 
         case STATE_ENTRY_DELAY:
             /* Còi bíp dồn dập 4Hz (100ms ON / 150ms OFF). LED chớp nhanh */
-            if (now - last_buz_tick >= 250)
+            if (Time_HasElapsed(now, last_buz_tick, 250U))
             {
                 last_buz_tick = now;
                 Buzzer_SetState(true);
                 HAL_GPIO_WritePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin, GPIO_PIN_RESET);
             }
-            else if (now - last_buz_tick >= 100)
+            else if (Time_HasElapsed(now, last_buz_tick, 100U))
             {
                 Buzzer_SetState(false);
                 HAL_GPIO_WritePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin, GPIO_PIN_SET);
@@ -211,7 +212,7 @@ static void FSM_Update_Outputs(uint32_t now)
         case STATE_TEMP_DISARM:
             /* Còi tắt. LED chớp đúp 2 nhịp */
             Buzzer_SetState(false);
-            if (now - last_led_tick >= 1000)
+            if (Time_HasElapsed(now, last_led_tick, 1000U))
             {
                 last_led_tick = now;
                 HAL_GPIO_TogglePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin);
@@ -221,7 +222,7 @@ static void FSM_Update_Outputs(uint32_t now)
         case STATE_ALARM_EMERGE:
             /* CÒI HÚ CỰC ĐẠI: Bật liên tục bằng PWM. LED chớp 10Hz */
             Buzzer_SetState(true);
-            if (now - last_led_tick >= 50)
+            if (Time_HasElapsed(now, last_led_tick, 50U))
             {
                 last_led_tick = now;
                 HAL_GPIO_TogglePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin);
@@ -230,16 +231,16 @@ static void FSM_Update_Outputs(uint32_t now)
 
         case STATE_TEMP_ALARM:
             /* Còi bíp ngắt quãng 1s Kêu / 1s Nghỉ để kiểm tra hiện trường */
-            if (now - last_buz_tick >= 2000)
+            if (Time_HasElapsed(now, last_buz_tick, 2000U))
             {
                 last_buz_tick = now;
                 Buzzer_SetState(true);
             }
-            else if (now - last_buz_tick >= 1000)
+            else if (Time_HasElapsed(now, last_buz_tick, 1000U))
             {
                 Buzzer_SetState(false);
             }
-            if (now - last_led_tick >= 500)
+            if (Time_HasElapsed(now, last_led_tick, 500U))
             {
                 last_led_tick = now;
                 HAL_GPIO_TogglePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin);
@@ -266,7 +267,7 @@ static void GetMaskedPin(char *dest, size_t dest_size)
 static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_motion, VibLevel_t vib_level)
 {
     static uint32_t last_render_tick = 0;
-    if (now - last_render_tick < 100) return; /* 10 FPS làm mới */
+    if (!Time_HasElapsed(now, last_render_tick, 100U)) return; /* 10 FPS làm mới */
     last_render_tick = now;
 
     SSD1306_Fill(SSD1306_COLOR_BLACK);
@@ -281,7 +282,7 @@ static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_motion, VibLe
     SSD1306_DrawLine(0, 13, 127, 13, SSD1306_COLOR_WHITE);
 
     /* 2. Kiểm tra nếu đang có banner lỗi thì ưu tiên hiển thị */
-    if (now < error_banner_timeout)
+    if (error_banner[0] != '\0' && !Time_DeadlineReached(now, error_banner_timeout))
     {
         SSD1306_GotoXY(2, 22);
         SSD1306_Puts(error_banner, &Font_7x10, SSD1306_COLOR_WHITE);
@@ -478,7 +479,7 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_motion, VibLevel_t v
                 }
                 pin_idx = 0; pin_buffer[0] = '\0';
             }
-            else if (now - state_start_tick >= EXIT_DELAY_MS)
+            else if (Time_HasElapsed(now, state_start_tick, EXIT_DELAY_MS))
             {
                 if (!door_open)
                 {
@@ -574,7 +575,7 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_motion, VibLevel_t v
                     SD_Log_Event("ENTRY_DELAY -> ALARM_EMERGE (Forced Entry)");
                     pin_idx = 0; pin_buffer[0] = '\0';
                 }
-                else if (now - state_start_tick >= ENTRY_DELAY_MS)
+                else if (Time_HasElapsed(now, state_start_tick, ENTRY_DELAY_MS))
                 {
                     currentState = STATE_ALARM_EMERGE;
                     state_start_tick = now;
@@ -604,7 +605,7 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_motion, VibLevel_t v
                 }
                 pin_idx = 0; pin_buffer[0] = '\0';
             }
-            else if (now - state_start_tick >= TEMP_DISARM_MS)
+            else if (Time_HasElapsed(now, state_start_tick, TEMP_DISARM_MS))
             {
                 if (!door_open)
                 {
@@ -666,7 +667,7 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_motion, VibLevel_t v
                 }
                 pin_idx = 0; pin_buffer[0] = '\0';
             }
-            else if (now - state_start_tick >= TEMP_ALARM_MS)
+            else if (Time_HasElapsed(now, state_start_tick, TEMP_ALARM_MS))
             {
                 if (!door_open)
                 {

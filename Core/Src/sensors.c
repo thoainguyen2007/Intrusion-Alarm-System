@@ -1,4 +1,5 @@
 #include "sensors.h"
+#include "time_utils.h"
 #include <stdio.h>
 
 /* Updated in EXTI2 and consumed in the main loop. */
@@ -12,7 +13,7 @@ static VibLevel_t lastVibLevel = VIB_NONE;
 void Sensors_Vib_EXTI_Callback(void)
 {
     uint32_t now = HAL_GetTick();
-    if (now - last_vib_pulse_tick >= VIB_GLITCH_FILTER_MS)
+    if (Time_HasElapsed(now, last_vib_pulse_tick, VIB_GLITCH_FILTER_MS))
     {
         vibPulseCount++;
         last_vib_pulse_tick = now;

@@ -6,6 +6,7 @@
   */
 
 #include "keypad.h"
+#include "time_utils.h"
 
 static GPIO_TypeDef* ROW_PORTS[4] = { R1_GPIO_Port, R2_GPIO_Port, R3_GPIO_Port, R4_GPIO_Port };
 static const uint16_t ROW_PINS[4] = { R1_Pin, R2_Pin, R3_Pin, R4_Pin };
@@ -65,7 +66,7 @@ char Keypad_GetKey(void)
         last_debounce_tick = now;
     }
 
-    if ((now - last_debounce_tick) >= 20) {
+    if (Time_HasElapsed(now, last_debounce_tick, 20U)) {
         if (current_raw_key != last_stable_key) {
             last_stable_key = current_raw_key;
             /* Chỉ kích hoạt khi vừa nhấn phím xuống (Sườn xuống - Edge Triggered) */
