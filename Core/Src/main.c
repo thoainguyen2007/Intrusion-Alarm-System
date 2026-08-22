@@ -362,7 +362,11 @@ int main(void)
 
     FSM_Process(key, is_door_open, is_pir_active, current_vib);
     SystemState_t logger_state = FSM_GetState();
-    SD_Logger_Process(logger_state == STATE_DISARM || logger_state == STATE_TEMP_DISARM);
+    /* Chỉ flush FatFs trong các trạng thái đã xác thực, không chặn lúc canh gác/còi hú. */
+    bool logger_io_allowed = (logger_state == STATE_DISARM ||
+                              logger_state == STATE_TEMP_DISARM ||
+                              logger_state == STATE_TEMP_ALARM);
+    SD_Logger_Process(logger_io_allowed);
 
     /* USER CODE END WHILE */
 

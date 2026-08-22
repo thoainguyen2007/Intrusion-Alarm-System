@@ -86,7 +86,7 @@ bool SD_Logger_Enqueue(const char *message)
 
 void SD_Logger_Process(bool allow_io)
 {
-    /* Never enter blocking FatFs/SPI code while the alarm is protecting. */
+    /* Caller only permits blocking FatFs/SPI work in authenticated safe states. */
     if (!allow_io) return;
 
     uint32_t now = HAL_GetTick();

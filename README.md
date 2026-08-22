@@ -37,11 +37,14 @@ Hệ thống Báo động Xâm nhập là một giải pháp an ninh nhúng th�
 * **Cổng Debug Serial (UART1):** Truyền log thời gian thực với tốc độ `115200 baud` lên máy tính.
 
 Nhật ký SD dùng hàng đợi RAM 16 sự kiện: FSM chỉ enqueue, không gọi FatFs/SPI khi
-đang `EXIT_DELAY`, `ARMED`, `ENTRY_DELAY` hoặc báo động. `sd_logger.c` chỉ ghi và
-`f_sync` trong cửa sổ an toàn `DISARM`, nên độ trễ thẻ không chặn vòng điều khiển
-khi hệ thống đang bảo vệ. Khi I/O lỗi, sự kiện chưa ghi được giữ lại, thẻ được
-đánh dấu offline và chỉ thử khởi tạo/mount lại mỗi 5 giây trong `DISARM`; nếu
-queue đầy, bộ đếm `dropped_count` và UART cho biết số sự kiện bị bỏ.
+đang `EXIT_DELAY`, `ARMED`, `ENTRY_DELAY` hoặc còi hú `ALARM_EMERGE`.
+`sd_logger.c` chỉ ghi và `f_sync` trong các cửa sổ đã xác thực `DISARM`,
+`TEMP_DISARM` và `TEMP_ALARM`, nên độ trễ thẻ không chặn vòng điều khiển khi đang
+canh gác hoặc còi hú. `TEMP_ALARM` cho phép xả sự kiện báo động xuống thẻ ngay
+sau khi người dùng xác nhận PIN, trước khi hệ thống tự động ARM lại. Khi I/O lỗi,
+sự kiện chưa ghi được giữ lại, thẻ được đánh dấu offline và chỉ thử khởi tạo/mount
+lại mỗi 5 giây trong trạng thái an toàn; nếu queue đầy, bộ đếm `dropped_count` và
+UART cho biết số sự kiện bị bỏ.
 
 ---
 
