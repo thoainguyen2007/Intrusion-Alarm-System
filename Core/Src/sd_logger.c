@@ -6,7 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define SD_LOG_QUEUE_DEPTH 8U
+#define SD_LOG_QUEUE_DEPTH 16U
 #define SD_LOG_MESSAGE_SIZE 96U
 #define SD_RETRY_INTERVAL_MS 5000U
 
@@ -84,12 +84,14 @@ bool SD_Logger_Enqueue(const char *message)
     return true;
 }
 
-void SD_Logger_Process(bool allow_recovery)
+void SD_Logger_Process(bool allow_io)
 {
+    /* Never enter blocking FatFs/SPI code while the alarm is protecting. */
+    if (!allow_io) return;
+
     uint32_t now = HAL_GetTick();
     if (!online) {
-        if (!allow_recovery ||
-            !Time_HasElapsed(now, last_retry_tick, SD_RETRY_INTERVAL_MS)) return;
+        if (!Time_HasElapsed(now, last_retry_tick, SD_RETRY_INTERVAL_MS)) return;
 
         last_retry_tick = now;
         SD_SPI_Result_t sd_result = SD_SPI_InitCard();

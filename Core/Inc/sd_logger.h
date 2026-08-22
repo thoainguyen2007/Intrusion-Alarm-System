@@ -6,7 +6,8 @@
 
 void SD_Logger_Init(bool storage_ready);
 bool SD_Logger_Enqueue(const char *message);
-void SD_Logger_Process(bool allow_recovery);
+/* Performs blocking FatFs work only when allow_io is true (safe DISARM window). */
+void SD_Logger_Process(bool allow_io);
 bool SD_Logger_IsOnline(void);
 uint32_t SD_Logger_GetDroppedCount(void);
 

@@ -36,11 +36,12 @@ Hệ thống Báo động Xâm nhập là một giải pháp an ninh nhúng th�
 * **Thẻ nhớ MicroSD (SPI1 + FATFS):** Ghi nhật ký chi tiết mốc thời gian, loại cảm biến kích hoạt và sự kiện hệ thống.
 * **Cổng Debug Serial (UART1):** Truyền log thời gian thực với tốc độ `115200 baud` lên máy tính.
 
-Nhật ký SD dùng hàng đợi RAM 8 sự kiện: FSM chỉ enqueue để hoàn tất chuyển trạng
-thái trước, còn `sd_logger.c` ghi và `f_sync` từng sự kiện sau bước xử lý FSM. Khi
-I/O lỗi, sự kiện chưa ghi được giữ lại, thẻ được đánh dấu offline và chỉ thử khởi
-tạo/mount lại mỗi 5 giây trong trạng thái `DISARM`; nếu queue đầy, bộ đếm
-`dropped_count` và UART cho biết số sự kiện bị bỏ.
+Nhật ký SD dùng hàng đợi RAM 16 sự kiện: FSM chỉ enqueue, không gọi FatFs/SPI khi
+đang `EXIT_DELAY`, `ARMED`, `ENTRY_DELAY` hoặc báo động. `sd_logger.c` chỉ ghi và
+`f_sync` trong cửa sổ an toàn `DISARM`, nên độ trễ thẻ không chặn vòng điều khiển
+khi hệ thống đang bảo vệ. Khi I/O lỗi, sự kiện chưa ghi được giữ lại, thẻ được
+đánh dấu offline và chỉ thử khởi tạo/mount lại mỗi 5 giây trong `DISARM`; nếu
+queue đầy, bộ đếm `dropped_count` và UART cho biết số sự kiện bị bỏ.
 
 ---
 
