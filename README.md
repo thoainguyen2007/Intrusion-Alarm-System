@@ -85,60 +85,42 @@ minh là ngõ ra. Chi tiết đo kiểm và chẩn đoán nằm trong [`moduleSD
 
 Hệ thống hoạt động dựa trên mô hình Máy trạng thái hữu hạn 7 trạng thái độc lập, khép kín và an toàn tuyệt đối:
 
-```
-                  ┌───────────────┐
-       ┌─────────>│    DISARM     │<────────────────────────┐
-       │          └───────┬───────┘                         │
-       │                  │ (Nhập đúng PIN khi cửa đóng)    │
-       │                  ▼                                 │
-       │          ┌───────────────┐                         │
-       │ (Hết giờ)│  EXIT DELAY   │                         │
-       │ & Cửa mở │   (15 giây)   │                         │
-       ├──────────┴───────┬───────┘                         │
-       │                  │ (Hết 15s & Cửa đã đóng)         │
-       │                  ▼                                 │
-       │          ┌───────────────┐                         │
-       │          │     ARMED     │<──────────────────┐     │
-       │          └───┬───────┬───┘                   │     │
-       │              │       │                       │     │
-       │ (PIR / Rung) │       │ (Rung mạnh / Cửa mở)  │     │
-       │              ▼       │                       │     │
-       │      ┌───────────────┐│                      │     │
-       │      │  ENTRY DELAY  ││                      │     │
-       │      │   (30 giây)   ││                      │     │
-       │      └───┬───────┬───┘│                      │     │
-       │          │       │    │                      │     │
- (Đúng PIN)       │       │    │                      │     │
-       │          │       │    │                      │     │
-       ▼          ▼       │    │                      │     │
-┌───────────────┐ (Hết 30s│    │                      │     │
-│  TEMP DISARM  │ /Cạy cửa)│   │                      │     │
-│   (60 giây)   │         │   │                      │     │
-└───┬───────┬───┘         ▼   ▼                      │     │
-    │       │     ┌───────────────┐                  │     │
-    │       └────>│ ALARM EMERGE  │                  │     │
-    │ (Hết 60s &  │  (Còi hú lớn) │                  │     │
-    │  Cửa mở)    └───┬───────────┘                  │     │
-    │                 │ (Nhập đúng PIN)              │     │
-    │ (Hết 60s &      ▼                              │     │
-    │  Cửa đóng)  ┌───────────────┐                  │     │
-    └────────────>│  TEMP ALARM   │──────────────────┘     │
-                  │   (30 giây)   │ (Hết 30s & Cửa đóng)   │
-                  └───┬───────────┘                        │
-                      │ (Nhập DISARM CODE)                 │
-                      └────────────────────────────────────┘
+```mermaid
+stateDiagram-v2
+    [*] --> DISARM
+    DISARM --> EXIT_DELAY: PIN đúng và cửa đóng
+    EXIT_DELAY --> DISARM: PIN đúng / hết 15s và cửa mở
+    EXIT_DELAY --> ARMED: hết 15s và cửa đóng
+
+    ARMED --> DISARM: PIN đúng
+    ARMED --> ENTRY_DELAY: cửa mở / rung nhẹ
+    ARMED --> ALARM_EMERGE: PIR khi cửa đóng / rung mạnh
+
+    ENTRY_DELAY --> TEMP_DISARM: PIN đúng
+    ENTRY_DELAY --> ALARM_EMERGE: hết 30s / rung mạnh
+
+    TEMP_DISARM --> DISARM: PIN đúng
+    TEMP_DISARM --> ARMED: hết 60s và cửa đóng
+    TEMP_DISARM --> ALARM_EMERGE: rung mạnh / hết 60s và cửa mở
+
+    ALARM_EMERGE --> TEMP_ALARM: PIN đúng
+    TEMP_ALARM --> DISARM: PIN đúng
+    TEMP_ALARM --> ARMED: hết 30s và cửa đóng
+    TEMP_ALARM --> ALARM_EMERGE: rung mạnh / hết 30s và cửa mở
 ```
 
 ### Chi tiết các trạng thái:
 1. **`DISARM` (Giải trừ / Chờ):** Hệ thống không kích hoạt báo động. Cho phép người dùng nhập mã PIN kích hoạt chế độ bảo vệ.
 2. **`EXIT DELAY` (Đếm ngược rời nhà - 15s):** Màn hình đếm lùi 15s, còi bíp nhịp chậm nhắc nhở. Người dùng có đủ thời gian bước ra ngoài và đóng cửa. Nếu hết 15s mà cửa vẫn mở, hệ thống hủy ARM và quay lại `DISARM`.
 3. **`ARMED` (Vũ trang / Giám sát toàn diện):** Hệ thống giám sát chặt chẽ:
-   * Nếu có người đi qua (PIR) hoặc Rung nhẹ $\rightarrow$ Chuyển sang `ENTRY DELAY`.
-   * Nếu có Rung mạnh đập phá ($\ge 20$ xung) hoặc Cửa bị cạy mở $\rightarrow$ Nhảy thẳng sang `ALARM EMERGE`.
-4. **`ENTRY DELAY` (Đếm ngược vào nhà - 30s):** Khi chủ nhà mở cửa bước vào, hệ thống bíp cảnh báo và đếm ngược 30s để nhập mã PIN. Nếu nhập đúng mã $\rightarrow$ Chuyển sang `TEMP DISARM`. Nếu quá 30s hoặc phát hiện cạy cửa bạo lực $\rightarrow$ Nhảy sang `ALARM EMERGE`.
-5. **`TEMP DISARM` (Giải trừ tạm thời - 60s):** Cấp quyền 60s để bốc dỡ hàng hóa hoặc chuyển đồ vào nhà. Hết 60s: nếu cửa đã đóng $\rightarrow$ Tự động chuyển về `ARMED`; nếu cửa vẫn mở $\rightarrow$ Kích hoạt `ALARM EMERGE`.
+   * Nếu cửa mở hoặc có rung nhẹ $\rightarrow$ Chuyển sang `ENTRY DELAY` để chủ nhà có thời gian nhập PIN.
+   * Nếu PIR phát hiện chuyển động khi cửa vẫn đóng, hoặc có rung mạnh ($\ge 20$ xung) $\rightarrow$ Nhảy thẳng sang `ALARM EMERGE`.
+4. **`ENTRY DELAY` (Đếm ngược vào nhà - 30s):** Khi chủ nhà mở cửa bước vào, hệ thống bíp cảnh báo và đếm ngược 30s để nhập mã PIN. Cửa mở và PIR là hoạt động dự kiến nên không tự kích báo động lần nữa. Nhập đúng mã $\rightarrow$ `TEMP DISARM`; hết 30s hoặc rung mạnh $\rightarrow$ `ALARM EMERGE`.
+5. **`TEMP DISARM` (Giải trừ tạm thời - 60s):** Cấp quyền 60s để bốc dỡ hàng hóa hoặc chuyển đồ vào nhà. Rung mạnh vẫn kích hoạt báo động. Hết 60s: nếu cửa đã đóng $\rightarrow$ tự động `ARMED`; nếu cửa vẫn mở $\rightarrow$ `ALARM EMERGE`.
 6. **`ALARM EMERGE` (Báo động khẩn cấp):** Còi hú liên tục công suất lớn, ghi log báo động khẩn cấp vào Thẻ nhớ MicroSD, màn hình OLED nhấp nháy cảnh báo. Chỉ tắt khi nhập đúng mã PIN giải trừ.
 7. **`TEMP ALARM` (Báo động tạm thời kiểm tra hiện trường - 30s):** Khi nhập mã trong trạng thái báo động, còi hạ âm lượng/bíp ngắt quãng trong 30s để chủ nhà vào kiểm tra hiện trường. Hết 30s: nếu cửa đã đóng $\rightarrow$ Tự động ARM lại; nếu cửa vẫn mở $\rightarrow$ Tái kích hoạt `ALARM EMERGE`.
+
+Mã PIN có đúng 4 chữ số. Sau 5 lần xác nhận sai, bàn phím bị khóa 30 giây; trong thời gian khóa, cảm biến và các bộ đếm thời gian vẫn tiếp tục hoạt động bình thường.
 
 ---
 
@@ -147,12 +129,12 @@ Hệ thống hoạt động dựa trên mô hình Máy trạng thái hữu hạn
 | Mã Test | Trạng Thái Bắt Đầu | Sự Kiện Kích Hoạt | Kết Quả Mong Đợi / Chuyển Trạng Thái |
 | :--- | :--- | :--- | :--- |
 | **TC01** | `DISARM` | Nhập đúng mã PIN khi cửa đóng | Vào `EXIT DELAY` (15s) $\rightarrow$ Hết 15s & Cửa đóng $\rightarrow$ Chuyển sang **`ARMED`**. |
-| **TC02** | `DISARM` | Nhập đúng mã PIN nhưng cửa mở | Vào `EXIT DELAY` (15s) $\rightarrow$ Hết 15s cửa vẫn mở $\rightarrow$ Hủy ARM, về **`DISARM`**, OLED báo lỗi. |
+| **TC02** | `DISARM` | Nhập đúng mã PIN nhưng cửa mở | Từ chối kích hoạt, giữ **`DISARM`** và OLED báo cửa đang mở. |
 | **TC03** | `EXIT DELAY` | Nhập mã PIN giải trừ | Hủy ngay chu trình đếm lùi $\rightarrow$ Trở về **`DISARM`**. |
-| **TC04** | `ARMED` | Phát hiện PIR hoặc Rung nhẹ hợp lệ | Chuyển sang **`ENTRY DELAY`** (30s countdown), còi bíp nhắc nhở. |
+| **TC04** | `ARMED` | Cửa mở hoặc phát hiện rung nhẹ | Chuyển sang **`ENTRY DELAY`** (30s countdown), còi bíp nhắc nhở. PIR khi cửa đóng chuyển thẳng sang báo động. |
 | **TC05** | `ENTRY DELAY` | Nhập đúng mã PIN trước 30s | Chuyển sang **`TEMP DISARM`** (60s). |
 | **TC06** | `ENTRY DELAY` | Hết 30s mà chưa nhập đúng PIN | Kích hoạt tức thì **`ALARM EMERGE`** (Còi hú toàn lực + Ghi thẻ SD). |
-| **TC07** | `ENTRY DELAY` | Cửa bị mở toang hoặc Rung mạnh | Chuyển thẳng sang **`ALARM EMERGE`** ngay lập tức. |
+| **TC07** | `ENTRY DELAY` | Rung mạnh; hoặc hết thời gian nhập PIN | Chuyển thẳng sang **`ALARM EMERGE`**. Cửa/PIR không làm ngắt sớm khoảng trễ vào nhà. |
 | **TC08** | `TEMP DISARM` | Hết 60s và Cửa đã đóng lại | Tự động kích hoạt lại trạng thái **`ARMED`**. |
 | **TC09** | `TEMP DISARM` | Hết 60s nhưng Cửa vẫn để mở | Kích hoạt **`ALARM EMERGE`** báo động quên đóng cửa. |
 | **TC10** | `ALARM EMERGE` | Nhập đúng mã PIN giải trừ | Chuyển sang **`TEMP ALARM`** (30s kiểm tra). Hết 30s nếu cửa đóng $\rightarrow$ Về `ARMED`; nếu cửa mở $\rightarrow$ Quay lại `ALARM EMERGE`. |

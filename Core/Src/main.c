@@ -361,7 +361,8 @@ int main(void)
     VibLevel_t current_vib = Vibration_GetLevel();
 
     FSM_Process(key, is_door_open, is_pir_active, current_vib);
-    SD_Logger_Process(FSM_GetState() == STATE_DISARM);
+    SystemState_t logger_state = FSM_GetState();
+    SD_Logger_Process(logger_state == STATE_DISARM || logger_state == STATE_TEMP_DISARM);
 
     /* USER CODE END WHILE */
 
