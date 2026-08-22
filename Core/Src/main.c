@@ -168,7 +168,7 @@ int main(void)
   MX_USART1_UART_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
-  /* Đăng ký filesystem FatFs cho thẻ nhớ MicroSD (Non-blocking delayed mount) */
+  /* Đăng ký FatFs; việc truy cập vật lý được hoãn đến lúc mount chủ động. */
   f_mount(&USERFatFS, USERPath, 0);
 
   /* Khởi tạo bàn phím ma trận Keypad 4x4 */

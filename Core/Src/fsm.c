@@ -53,7 +53,7 @@ static void SD_Log_Event(const char *event_msg)
     /* In log ra UART1 trước */
     printf("[LOG] %s\r\n", event_msg);
 
-    /* Thử ghi file nhật ký ALARM_LOG.TXT trên thẻ nhớ SD (Non-blocking safe) */
+    /* Ghi đồng bộ sự kiện vào LOG.TXT để dữ liệu bền vững sau khi mất nguồn. */
     FIL file;
     FRESULT res = f_open(&file, "0:LOG.TXT", FA_OPEN_ALWAYS | FA_WRITE);
     if (res == FR_OK)

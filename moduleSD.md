@@ -301,17 +301,17 @@ Phân loại nhanh:
 
 ## 9. Tài liệu tham khảo
 
-1. STMicroelectronics, **RM0008 – STM32F101/102/103/105/107 Reference Manual**:  
+1. STMicroelectronics, **RM0008 – STM32F101/102/103/105/107 Reference Manual**:
    https://www.st.com/resource/en/reference_manual/rm0008-stm32f103xx-advanced-armbased-32bit-mcus-stmicroelectronics.pdf
-2. SD Association, **Physical Layer Simplified Specification**:  
+2. SD Association, **Physical Layer Simplified Specification**:
    https://www.sdcard.org/downloads/pls/
-3. Nexperia, **74LVC125A Quad Buffer/Line Driver Datasheet**:  
+3. Nexperia, **74LVC125A Quad Buffer/Line Driver Datasheet**:
    https://assets.nexperia.com/documents/data-sheet/74LVC125A.pdf
-4. Catalex MicroSD module schematic:  
+4. Catalex MicroSD module schematic:
    https://nettigo.eu/attachments/531
-5. AMS1117-3.3 specifications:  
+5. AMS1117-3.3 specifications:
    https://www.datasheets.com/advanced-monolithic-systems/AMS1117-3.3
-6. Espressif Arduino ESP32 core, SD SPI implementation (`sd_diskio.cpp`), phiên bản thử nghiệm 3.3.11:  
+6. Espressif Arduino ESP32 core, SD SPI implementation (`sd_diskio.cpp`), phiên bản thử nghiệm 3.3.11:
    https://github.com/espressif/arduino-esp32
 
 ---

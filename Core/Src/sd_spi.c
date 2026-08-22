@@ -12,6 +12,7 @@
 #define CMD0 0U
 #define CMD8 8U
 #define CMD9 9U
+#define CMD13 13U
 #define CMD16 16U
 #define CMD17 17U
 #define CMD24 24U
@@ -242,7 +243,7 @@ SD_SPI_Result_t SD_SPI_ReadBlock(uint32_t sector, uint8_t *buffer)
 SD_SPI_Result_t SD_SPI_WriteBlock(uint32_t sector, const uint8_t *buffer)
 {
     uint32_t address;
-    uint8_t r1, rx, token = DATA_TOKEN, crc[2] = {0xFFU, 0xFFU};
+    uint8_t r1, r2, rx, token = DATA_TOKEN, crc[2] = {0xFFU, 0xFFU};
     if (!card.initialized) return SD_SPI_NOT_INITIALIZED;
     if (buffer == NULL || !sector_address(sector, &address)) return SD_SPI_PARAMETER_ERROR;
     SD_SPI_Result_t result = command(CMD24, address, 0x01U, &r1);
@@ -258,7 +259,15 @@ SD_SPI_Result_t SD_SPI_WriteBlock(uint32_t sector, const uint8_t *buffer)
     if ((rx & 0x1FU) != DATA_ACCEPTED) { deselect(); return SD_SPI_WRITE_REJECTED; }
     result = wait_ready(WRITE_TIMEOUT_MS);
     deselect();
-    return result;
+    if (result != SD_SPI_OK) return result;
+
+    /* CMD13 catches programming/ECC/write-protect errors after the busy phase. */
+    result = command(CMD13, 0U, 0x01U, &r1);
+    if (result == SD_SPI_OK && transfer(0xFFU, &r2) != HAL_OK)
+        result = SD_SPI_HAL_ERROR;
+    deselect();
+    if (result != SD_SPI_OK) return result;
+    return (r1 == 0U && r2 == 0U) ? SD_SPI_OK : SD_SPI_STATUS_ERROR;
 }
 
 SD_SPI_Result_t SD_SPI_Sync(void)
@@ -331,6 +340,7 @@ const char *SD_SPI_ResultString(SD_SPI_Result_t result)
         case SD_SPI_DATA_TOKEN_TIMEOUT: return "Data token timeout/error";
         case SD_SPI_WRITE_REJECTED: return "Card rejected data";
         case SD_SPI_BUSY_TIMEOUT: return "Card busy timeout";
+        case SD_SPI_STATUS_ERROR: return "Card status error after write";
         default: return "Unknown SD error";
     }
 }

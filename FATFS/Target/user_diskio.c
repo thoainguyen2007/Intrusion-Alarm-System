@@ -123,7 +123,8 @@ DRESULT USER_read (
 )
 {
   /* USER CODE BEGIN READ */
-    if (pdrv != 0U || buff == NULL || count == 0U) return RES_PARERR;
+    if (pdrv != 0U || buff == NULL || count == 0U ||
+        sector > UINT32_MAX - (count - 1U)) return RES_PARERR;
     if (!SD_SPI_IsReady()) return RES_NOTRDY;
     for (UINT i = 0U; i < count; ++i)
       if (SD_SPI_ReadBlock((uint32_t)sector + i,
@@ -150,7 +151,8 @@ DRESULT USER_write (
 )
 {
   /* USER CODE BEGIN WRITE */
-    if (pdrv != 0U || buff == NULL || count == 0U) return RES_PARERR;
+    if (pdrv != 0U || buff == NULL || count == 0U ||
+        sector > UINT32_MAX - (count - 1U)) return RES_PARERR;
     if (!SD_SPI_IsReady()) return RES_NOTRDY;
     for (UINT i = 0U; i < count; ++i)
       if (SD_SPI_WriteBlock((uint32_t)sector + i,
