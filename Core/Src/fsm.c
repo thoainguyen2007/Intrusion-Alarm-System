@@ -58,12 +58,31 @@ static void SD_Log_Event(const char *event_msg)
     FRESULT res = f_open(&file, "0:LOG.TXT", FA_OPEN_ALWAYS | FA_WRITE);
     if (res == FR_OK)
     {
-        f_lseek(&file, f_size(&file));
         char log_line[128];
-        snprintf(log_line, sizeof(log_line), "[%lums] %s\r\n", HAL_GetTick(), event_msg);
-        UINT bytes_written;
-        f_write(&file, log_line, strlen(log_line), &bytes_written);
-        f_close(&file);
+        int line_length = snprintf(log_line, sizeof(log_line),
+                                   "[%lums] %s\r\n", HAL_GetTick(), event_msg);
+        UINT bytes_written = 0U;
+        UINT bytes_to_write = (line_length > 0 && line_length < (int)sizeof(log_line))
+                            ? (UINT)line_length : 0U;
+
+        res = f_lseek(&file, f_size(&file));
+        if (res == FR_OK && bytes_to_write != 0U)
+            res = f_write(&file, log_line, bytes_to_write, &bytes_written);
+        if (res == FR_OK && bytes_written == bytes_to_write)
+            res = f_sync(&file);
+
+        FRESULT close_res = f_close(&file);
+        if (res == FR_OK && close_res != FR_OK) res = close_res;
+
+        if (res == FR_OK && bytes_written == bytes_to_write)
+            printf("[FATFS] Append LOG.TXT: OK (%u bytes)\r\n", bytes_written);
+        else
+            printf("[FATFS] Append LOG.TXT failed (FR=%u, %u/%u bytes)\r\n",
+                   (unsigned int)res, bytes_written, bytes_to_write);
+    }
+    else
+    {
+        printf("[FATFS] Open LOG.TXT failed (FR=%u)\r\n", (unsigned int)res);
     }
 }
 

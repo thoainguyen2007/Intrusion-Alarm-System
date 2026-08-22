@@ -214,6 +214,30 @@ int main(void)
              sd_sector_buffer[2], sd_sector_buffer[3],
              sd_sector_buffer[510], sd_sector_buffer[511]);
     }
+
+    FRESULT mount_result = f_mount(&USERFatFS, USERPath, 1);
+    printf("[FATFS] Mount: %s (FR=%u)\r\n",
+           (mount_result == FR_OK) ? "OK" : "FAILED",
+           (unsigned int)mount_result);
+    if (mount_result == FR_OK)
+    {
+      DWORD free_clusters;
+      FATFS *mounted_fs;
+      FRESULT free_result = f_getfree(USERPath, &free_clusters, &mounted_fs);
+      if (free_result == FR_OK)
+      {
+        uint32_t total_kib = (uint32_t)((mounted_fs->n_fatent - 2U) *
+                             mounted_fs->csize / 2U);
+        uint32_t free_kib = (uint32_t)(free_clusters * mounted_fs->csize / 2U);
+        printf("[FATFS] Capacity: %lu KiB, free: %lu KiB\r\n",
+               total_kib, free_kib);
+      }
+      else
+      {
+        printf("[FATFS] Space query failed (FR=%u)\r\n",
+               (unsigned int)free_result);
+      }
+    }
   }
 
   /* Khởi tạo màn hình OLED SH1106 1.3 inch */

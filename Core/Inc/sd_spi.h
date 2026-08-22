@@ -37,6 +37,7 @@ SD_SPI_Result_t SD_SPI_InitCard(void);
 SD_SPI_Result_t SD_SPI_ReadBlock(uint32_t sector, uint8_t *buffer);
 SD_SPI_Result_t SD_SPI_WriteBlock(uint32_t sector, const uint8_t *buffer);
 SD_SPI_Result_t SD_SPI_Sync(void);
+SD_SPI_Result_t SD_SPI_GetSectorCount(uint32_t *sector_count);
 bool SD_SPI_IsReady(void);
 const SD_SPI_CardInfo_t *SD_SPI_GetCardInfo(void);
 const SD_SPI_BusStats_t *SD_SPI_GetBusStats(void);

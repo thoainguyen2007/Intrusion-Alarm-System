@@ -11,6 +11,7 @@
 #define RESPONSE_POLLS 32U
 #define CMD0 0U
 #define CMD8 8U
+#define CMD9 9U
 #define CMD16 16U
 #define CMD17 17U
 #define CMD24 24U
@@ -267,6 +268,47 @@ SD_SPI_Result_t SD_SPI_Sync(void)
     if (result == SD_SPI_OK) result = wait_ready(WRITE_TIMEOUT_MS);
     deselect();
     return result;
+}
+
+SD_SPI_Result_t SD_SPI_GetSectorCount(uint32_t *sector_count)
+{
+    uint8_t r1, csd[16], crc[2];
+    if (!card.initialized) return SD_SPI_NOT_INITIALIZED;
+    if (sector_count == NULL) return SD_SPI_PARAMETER_ERROR;
+
+    SD_SPI_Result_t result = command(CMD9, 0U, 0x01U, &r1);
+    if (result != SD_SPI_OK) return result;
+    if (r1 != 0U) {
+        deselect();
+        return SD_SPI_DATA_TOKEN_TIMEOUT;
+    }
+    result = wait_token(DATA_TOKEN, READ_TIMEOUT_MS);
+    if (result == SD_SPI_OK) result = read_bytes(csd, sizeof(csd));
+    if (result == SD_SPI_OK) result = read_bytes(crc, sizeof(crc));
+    deselect();
+    if (result != SD_SPI_OK) return result;
+
+    if ((csd[0] & 0xC0U) == 0x40U) {
+        /* CSD v2: capacity in units of 1024 sectors. */
+        uint32_t c_size = ((uint32_t)(csd[7] & 0x3FU) << 16) |
+                          ((uint32_t)csd[8] << 8) | csd[9];
+        *sector_count = (c_size + 1U) * 1024U;
+    } else if ((csd[0] & 0xC0U) == 0x00U) {
+        /* CSD v1: convert byte capacity to 512-byte logical sectors. */
+        uint32_t read_bl_len = csd[5] & 0x0FU;
+        uint32_t c_size = ((uint32_t)(csd[6] & 0x03U) << 10) |
+                          ((uint32_t)csd[7] << 2) |
+                          ((uint32_t)(csd[8] & 0xC0U) >> 6);
+        uint32_t c_size_mult = ((uint32_t)(csd[9] & 0x03U) << 1) |
+                               ((uint32_t)(csd[10] & 0x80U) >> 7);
+        uint64_t bytes = ((uint64_t)c_size + 1ULL) <<
+                         (c_size_mult + read_bl_len + 2U);
+        *sector_count = (uint32_t)(bytes / SD_SPI_BLOCK_SIZE);
+    } else {
+        return SD_SPI_PARAMETER_ERROR;
+    }
+
+    return (*sector_count != 0U) ? SD_SPI_OK : SD_SPI_PARAMETER_ERROR;
 }
 
 bool SD_SPI_IsReady(void) { return card.initialized; }
