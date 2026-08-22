@@ -33,6 +33,7 @@
 #include "sensors.h"
 #include "fsm.h"
 #include "sd_spi.h"
+#include "sd_logger.h"
 #include "time_utils.h"
 #include <stdio.h>
 #include <string.h>
@@ -204,6 +205,7 @@ int main(void)
   printf("========================================\r\n");
 
   /* Initialize the card and read sector 0 without modifying it. */
+  bool sd_storage_ready = false;
   SD_SPI_Result_t sd_result = SD_SPI_InitCard();
   printf("[SD] Init: %s (R1=0x%02X)\r\n",
          SD_SPI_ResultString(sd_result), SD_SPI_GetCardInfo()->last_r1);
@@ -234,6 +236,7 @@ int main(void)
     }
 
     FRESULT mount_result = f_mount(&USERFatFS, USERPath, 1);
+    sd_storage_ready = (mount_result == FR_OK);
     printf("[FATFS] Mount: %s (FR=%u)\r\n",
            (mount_result == FR_OK) ? "OK" : "FAILED",
            (unsigned int)mount_result);
@@ -257,6 +260,8 @@ int main(void)
       }
     }
   }
+
+  SD_Logger_Init(sd_storage_ready);
 
   /* Khởi tạo màn hình OLED SH1106 1.3 inch */
   SSD1306_Init(&hi2c1);
@@ -356,6 +361,7 @@ int main(void)
     VibLevel_t current_vib = Vibration_GetLevel();
 
     FSM_Process(key, is_door_open, is_pir_active, current_vib);
+    SD_Logger_Process(FSM_GetState() == STATE_DISARM);
 
     /* USER CODE END WHILE */
 

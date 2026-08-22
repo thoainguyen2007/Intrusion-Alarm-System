@@ -3,7 +3,7 @@
 #include "tim.h"
 #include "ssd1306.h"
 #include "fonts.h"
-#include "fatfs.h"
+#include "sd_logger.h"
 #include "time_utils.h"
 #include <stdio.h>
 #include <string.h>
@@ -51,40 +51,10 @@ static uint32_t last_led_tick = 0;
 /* ==================================================================== */
 static void SD_Log_Event(const char *event_msg)
 {
-    /* In log ra UART1 trước */
     printf("[LOG] %s\r\n", event_msg);
-
-    /* Ghi đồng bộ sự kiện vào LOG.TXT để dữ liệu bền vững sau khi mất nguồn. */
-    FIL file;
-    FRESULT res = f_open(&file, "0:LOG.TXT", FA_OPEN_ALWAYS | FA_WRITE);
-    if (res == FR_OK)
-    {
-        char log_line[128];
-        int line_length = snprintf(log_line, sizeof(log_line),
-                                   "[%lums] %s\r\n", HAL_GetTick(), event_msg);
-        UINT bytes_written = 0U;
-        UINT bytes_to_write = (line_length > 0 && line_length < (int)sizeof(log_line))
-                            ? (UINT)line_length : 0U;
-
-        res = f_lseek(&file, f_size(&file));
-        if (res == FR_OK && bytes_to_write != 0U)
-            res = f_write(&file, log_line, bytes_to_write, &bytes_written);
-        if (res == FR_OK && bytes_written == bytes_to_write)
-            res = f_sync(&file);
-
-        FRESULT close_res = f_close(&file);
-        if (res == FR_OK && close_res != FR_OK) res = close_res;
-
-        if (res == FR_OK && bytes_written == bytes_to_write)
-            printf("[FATFS] Append LOG.TXT: OK (%u bytes)\r\n", bytes_written);
-        else
-            printf("[FATFS] Append LOG.TXT failed (FR=%u, %u/%u bytes)\r\n",
-                   (unsigned int)res, bytes_written, bytes_to_write);
-    }
-    else
-    {
-        printf("[FATFS] Open LOG.TXT failed (FR=%u)\r\n", (unsigned int)res);
-    }
+    if (!SD_Logger_Enqueue(event_msg))
+        printf("[FATFS] Log queue full/invalid, dropped=%lu\r\n",
+               SD_Logger_GetDroppedCount());
 }
 
 /* ==================================================================== */

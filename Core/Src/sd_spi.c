@@ -320,6 +320,13 @@ SD_SPI_Result_t SD_SPI_GetSectorCount(uint32_t *sector_count)
     return (*sector_count != 0U) ? SD_SPI_OK : SD_SPI_PARAMETER_ERROR;
 }
 
+void SD_SPI_InvalidateCard(void)
+{
+    card.initialized = false;
+    card.type = SD_SPI_CARD_NONE;
+    HAL_GPIO_WritePin(CS_GPIO_Port, CS_Pin, GPIO_PIN_SET);
+}
+
 bool SD_SPI_IsReady(void) { return card.initialized; }
 const SD_SPI_CardInfo_t *SD_SPI_GetCardInfo(void) { return &card; }
 const SD_SPI_BusStats_t *SD_SPI_GetBusStats(void) { return &bus_stats; }
