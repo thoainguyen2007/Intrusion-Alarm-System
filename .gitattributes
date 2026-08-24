@@ -1,0 +1,27 @@
+# Keep source and project metadata consistent across Windows/Linux toolchains.
+* text=auto
+
+*.c       text eol=lf
+*.h       text eol=lf
+*.s       text eol=lf
+*.ld      text eol=lf
+*.cmake   text eol=lf
+CMakeLists.txt text eol=lf
+*.ioc     text eol=lf
+*.md      text eol=lf
+*.txt     text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.json    text eol=lf
+
+*.bat     text eol=crlf
+
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.pdf     binary
+*.elf     binary
+*.bin     binary
+*.hex     binary
