@@ -266,16 +266,8 @@ static void FSM_Update_Outputs(uint32_t now)
             break;
 
         case STATE_TEMP_ALARM:
-            /* Còi bíp ngắt quãng 1s Kêu / 1s Nghỉ để kiểm tra hiện trường */
-            if (Time_HasElapsed(now, last_buz_tick, 2000U))
-            {
-                last_buz_tick = now;
-                Buzzer_SetState(true);
-            }
-            else if (Time_HasElapsed(now, last_buz_tick, 1000U))
-            {
-                Buzzer_SetState(false);
-            }
+            /* Sau khi xác thực báo động, còi vẫn hú đủ 30s để kiểm tra hiện trường. */
+            Buzzer_SetState(true);
             if (Time_HasElapsed(now, last_led_tick, 500U))
             {
                 last_led_tick = now;
@@ -443,7 +435,8 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_motion, VibLevel_t v
         SD_Log_Event("PIN keypad lockout expired");
     }
 
-    if (!pin_locked && key_pressed != 0 && key_pressed != '-')
+    if (!pin_locked && currentState != STATE_TEMP_ALARM &&
+        key_pressed != 0 && key_pressed != '-')
     {
         if (key_pressed >= '0' && key_pressed <= '9')
         {
@@ -526,15 +519,14 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_motion, VibLevel_t v
             }
             else if (door_open)
             {
-                /* Cửa mở hợp lệ bắt đầu thời gian cho chủ nhà nhập PIN. */
-                FSM_TransitionTo(STATE_ENTRY_DELAY, now,
-                                 "ARMED -> ENTRY_DELAY (door opened)");
+                /* Cửa mở khi đã ARM là xâm nhập trực tiếp. */
+                FSM_TransitionTo(STATE_ALARM_EMERGE, now,
+                                 "ARMED -> ALARM_EMERGE (door opened)");
             }
             else if (pir_motion)
             {
-                /* PIR khi cửa chưa mở là chuyển động bất thường trong vùng bảo vệ. */
-                FSM_TransitionTo(STATE_ALARM_EMERGE, now,
-                                 "ARMED -> ALARM_EMERGE (interior PIR)");
+                FSM_TransitionTo(STATE_ENTRY_DELAY, now,
+                                 "ARMED -> ENTRY_DELAY (PIR motion)");
             }
             else if (vib_level == VIB_LIGHT)
             {
@@ -554,12 +546,17 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_motion, VibLevel_t v
                 FSM_TransitionTo(STATE_ALARM_EMERGE, now,
                                  "ENTRY_DELAY -> ALARM_EMERGE (heavy vibration)");
             }
+            else if (door_open)
+            {
+                FSM_TransitionTo(STATE_ALARM_EMERGE, now,
+                                 "ENTRY_DELAY -> ALARM_EMERGE (door opened)");
+            }
             else if (Time_HasElapsed(now, state_start_tick, ENTRY_DELAY_MS))
             {
                 FSM_TransitionTo(STATE_ALARM_EMERGE, now,
                                  "ENTRY_DELAY -> ALARM_EMERGE (timeout)");
             }
-            /* Door/PIR được bỏ qua: đây là chuyển động dự kiến trong lối vào. */
+            /* PIR không làm đổi trạng thái; cửa mở luôn là xâm nhập. */
             break;
 
         case STATE_TEMP_DISARM:
@@ -591,12 +588,7 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_motion, VibLevel_t v
             break;
 
         case STATE_TEMP_ALARM:
-            if (is_pin_correct)
-            {
-                FSM_TransitionTo(STATE_DISARM, now,
-                                 "TEMP_ALARM -> DISARM (valid PIN)");
-            }
-            else if (vib_level == VIB_HEAVY)
+            if (vib_level == VIB_HEAVY)
             {
                 FSM_TransitionTo(STATE_ALARM_EMERGE, now,
                                  "TEMP_ALARM -> ALARM_EMERGE (heavy vibration)");
