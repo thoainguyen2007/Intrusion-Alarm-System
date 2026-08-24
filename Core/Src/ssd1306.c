@@ -39,12 +39,9 @@ uint8_t SSD1306_Init(I2C_HandleTypeDef *hi2c)
 {
     SSD1306_I2C = hi2c;
 
-    /* Check device I2C address */
-    if (HAL_I2C_IsDeviceReady(SSD1306_I2C, 0x78, 2, 5) == HAL_OK) {
-        DevAddress = 0x78;
-    } else if (HAL_I2C_IsDeviceReady(SSD1306_I2C, 0x7A, 2, 5) == HAL_OK) {
-        DevAddress = 0x7A;
-    } else {
+    /* This board uses a fixed SH1106 address: 0x3C (HAL format 0x78). */
+    DevAddress = SSD1306_I2C_ADDR;
+    if (HAL_I2C_IsDeviceReady(SSD1306_I2C, DevAddress, 2, 5) != HAL_OK) {
         SSD1306.Initialized = 0;
         return 0; /* Device not connected, abort to prevent I2C delays */
     }
