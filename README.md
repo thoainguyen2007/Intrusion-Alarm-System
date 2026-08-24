@@ -1,8 +1,9 @@
 # HỆ THỐNG BÁO ĐỘNG XÂM NHẬP (INTRUSION ALARM SYSTEM)
 ### STM32F103C8T6 (ARM Cortex-M3 @ 72MHz)
 
-> **Tên đề tài tiếng Anh:** Intrusion Alarm System Based on Reed Switch & PIR with EXTI on STM32F103  
-> **Tên đề tài tiếng Việt:** Hệ thống Báo Động Xâm Nhập Dựa trên Công tắc Từ & PIR với Ngắt ngoài EXTI trên STM32F103  
+> **Tên đề tài tiếng Anh:** STM32F103 Intrusion Alarm System with Multi-Sensor FSM
+>
+> **Tên đề tài tiếng Việt:** Hệ thống Báo động Xâm nhập Đa cảm biến dùng FSM trên STM32F103
 > **Nhóm sinh viên thực hiện (4 thành viên):**
 > 1. **Nguyễn Lê Hữu Thoại** (2511006) - *Nhóm trưởng*: Thiết kế mô hình FSM, tích hợp hệ thống, xử lý I/O, viết tài liệu.
 > 2. **Hàng Tuấn Bảo** (2510438): Khối cảm biến đầu vào (INPUT: Reed, PIR, SW-420, mạch chống nhiễu, EXTI).
@@ -55,19 +56,19 @@ Toàn bộ sơ đồ chân được cấu hình chuẩn trên STM32F103C8T6:
 | Khối Chức Năng | Linh Kiện | Chân STM32 | Chế Độ Cấu Hình (GPIO/Peripheral) | Chức Năng Chi Tiết |
 | :--- | :--- | :--- | :--- | :--- |
 | **Cảm Biến Cửa** | Công tắc từ (MC-38 / Reed Switch) | **`PA0`** | `GPIO_EXTI0` (Pull-up, 2 sườn ngắt) | Đóng cửa = 0V, Mở cửa = 3.3V (Ngắt kích hoạt tức thì) |
-| **Cảm Biến Thân Nhiệt** | Cảm biến chuyển động PIR (HC-SR501) | **`PA1`** | `GPIO_EXTI1` (Pull-down, Sườn lên) | Phát hiện người (Cấp nguồn VCC = 5V, Jumper chế độ **H**) |
+| **Cảm Biến Thân Nhiệt** | Cảm biến chuyển động PIR (HC-SR501) | **`PA1`** | Pull-down; `.ioc` giữ `EXTI1` sườn lên, firmware lấy mẫu hai mức trong main | OUT mức HIGH khi phát hiện (VCC = 5V, jumper **H**) |
 | **Cảm Biến Rung** | Module rung SW-420 | **`PA2`** | `GPIO_EXTI2` (Pull-up, Sườn xuống) | Thu thập xung rung chấn động đập/cạy cửa |
-| **Thẻ Nhớ (CS)** | Module MicroSD SPI | **`PA4`** | `GPIO_Output_PP` (Pull-up) | Chip Select (CS) điều khiển giao tiếp thẻ nhớ |
-| **Thẻ Nhớ (SCK)** | Module MicroSD SPI | **`PA5`** | `SPI1_SCK` (Master, Baudrate Prescaler) | Xung nhịp đồng bộ truyền dữ liệu SPI1 |
+| **Thẻ Nhớ (CS)** | Module MicroSD SPI | **`PA4`** | `GPIO_Output_PP`, không pull, mặc định HIGH | Chip Select (CS) điều khiển giao tiếp thẻ nhớ |
+| **Thẻ Nhớ (SCK)** | Module MicroSD SPI | **`PA5`** | `SPI1_SCK`, master | Khoảng 281 kHz lúc khởi tạo; chuyển lên khoảng 9 MHz sau khi thẻ sẵn sàng |
 | **Thẻ Nhớ (MISO)** | Module MicroSD SPI | **`PA6`** | `SPI1_MISO` (Master In Slave Out) | Dữ liệu từ thẻ SD gửi về STM32 |
 | **Thẻ Nhớ (MOSI)** | Module MicroSD SPI | **`PA7`** | `SPI1_MOSI` (Master Out Slave In) | Dữ liệu từ STM32 ghi vào thẻ SD qua FATFS |
-| **Còi Báo Động** | Active/Passive Buzzer | **`PA8`** | `GPIO_Output_PP` / TIM1_CH1 | Điều khiển tiếng bíp phím và còi hú báo động |
+| **Còi Báo Động** | Passive buzzer hoặc mạch driver còi | **`PA8`** | `TIM1_CH1` PWM | Điều khiển tiếng bíp phím và còi hú báo động |
 | **UART Debug (TX)**| Mạch nạp ST-Link / USB-UART | **`PA9`** | `USART1_TX` (115200 8N1) | Truyền log `printf` lên máy tính |
-| **UART Debug (RX)**| Mạch nạp ST-Link / USB-UART | **`PA10`** | `USART1_RX` (115200 8N1) | Nhận lệnh điều khiển từ máy tính |
-| **Bàn Phím (Hàng)** | Keypad 4x4 (Row 1..4) | **`PB0, PB1, PB10, PB11`** | `GPIO_Output_OD` (Pull-up) | Quét lần lượt từng hàng ma trận phím |
+| **UART Debug (RX)**| USB-UART | **`PA10`** | `USART1_RX` (115200 8N1) | Đã cấu hình nhưng firmware hiện chưa xử lý lệnh UART |
+| **Bàn Phím (Hàng)** | Keypad 4x4 (Row 1..4) | **`PB0, PB1, PB10, PB11`** | `GPIO_Output_PP`, mặc định HIGH | Lần lượt kéo từng hàng xuống LOW để quét phím |
 | **Bàn Phím (Cột)** | Keypad 4x4 (Col 1..4) | **`PB12, PB13, PB14, PB15`** | `GPIO_Input` (Pull-up) | Đọc trạng thái cột để giải mã phím bấm |
 | **Màn Hình OLED** | OLED 1.3" SH1106, `0x3C`/HAL `0x78` | **`PB6`** (SCL), **`PB7`** (SDA) | `I2C1_SCL`, `I2C1_SDA` (Fast Mode 400kHz) | Hiển thị giao diện UI đa màn hình |
-| **LED Trạng Thái** | Onboard LED | **`PC13`** | `GPIO_Output_OD` (Active-Low) | Đèn báo nhịp tim hệ thống (Heartbeat 500ms) |
+| **LED Trạng Thái** | Onboard LED | **`PC13`** | `GPIO_Output_PP` (Active-Low) | Đèn báo nhịp tim hệ thống |
 
 Module MicroSD 6 chân dùng trong dự án được nối theo thứ tự chức năng:
 
@@ -82,11 +83,13 @@ Module dạng Catalex có AMS1117-3.3 phải được cấp vào chân `VCC` b�
 đã đo xác nhận; không cấp 3.3 V qua AMS1117 và không dùng chân `5VIN` chưa xác
 minh là ngõ ra. Chi tiết đo kiểm và chẩn đoán nằm trong [`moduleSD.md`](moduleSD.md).
 
+Reed switch thụ động được mắc giữa `PA0` và `GND`; firmware dùng pull-up nội nên cửa đóng đọc LOW, cửa mở đọc HIGH. Không mắc reed trực tiếp thành đường ngắn mạch giữa `3.3V` và `GND`.
+
 ---
 
 ## 3. THIẾT KẾ MÁY TRẠNG THÁI HỮU HẠN (7-STATE FSM)
 
-Hệ thống hoạt động dựa trên mô hình Máy trạng thái hữu hạn 7 trạng thái độc lập, khép kín và an toàn tuyệt đối:
+Hệ thống hoạt động dựa trên máy trạng thái hữu hạn gồm 7 trạng thái. Các chuyển trạng thái dưới đây phản ánh trực tiếp logic trong `Core/Src/fsm.c`:
 
 ```mermaid
 stateDiagram-v2
@@ -117,12 +120,12 @@ stateDiagram-v2
 3. **`ARMED` (Vũ trang / Giám sát toàn diện):** Hệ thống giám sát chặt chẽ:
    * Nếu PIR phát hiện chuyển động hoặc có rung nhẹ $\rightarrow$ Chuyển sang `ENTRY DELAY` để xác thực PIN trước khi báo động.
    * Nếu cửa mở hoặc có rung mạnh ($\ge 20$ xung) $\rightarrow$ Nhảy thẳng sang `ALARM EMERGE`.
-4. **`ENTRY DELAY` (Cảnh báo sớm - 30s):** Trạng thái này được kích bởi rung nhẹ và cho người dùng 30s để nhập PIN. Nhập đúng mã $\rightarrow$ `TEMP DISARM`; cửa mở, hết 30s hoặc rung mạnh $\rightarrow$ `ALARM EMERGE`. PIR không làm thay đổi lại trạng thái đang đếm.
+4. **`ENTRY DELAY` (Cảnh báo sớm - 30s):** Trạng thái này được kích bởi PIR hoặc rung nhẹ và cho người dùng 30s để nhập PIN. Nhập đúng mã $\rightarrow$ `TEMP DISARM`; cửa mở, hết 30s hoặc rung mạnh $\rightarrow$ `ALARM EMERGE`. PIR không khởi động lại bộ đếm.
 5. **`TEMP DISARM` (Giải trừ tạm thời - 60s):** Cấp quyền 60s để bốc dỡ hàng hóa hoặc chuyển đồ vào nhà. Rung mạnh vẫn kích hoạt báo động. Hết 60s: nếu cửa đã đóng $\rightarrow$ tự động `ARMED`; nếu cửa vẫn mở $\rightarrow$ `ALARM EMERGE`.
-6. **`ALARM EMERGE` (Báo động khẩn cấp):** Còi hú liên tục công suất lớn, ghi log báo động khẩn cấp vào Thẻ nhớ MicroSD, màn hình OLED nhấp nháy cảnh báo. Chỉ tắt khi nhập đúng mã PIN giải trừ.
+6. **`ALARM EMERGE` (Báo động khẩn cấp):** Còi hú liên tục, sự kiện báo động được đưa vào queue RAM và màn hình OLED nhấp nháy cảnh báo. PIN đúng chuyển sang `TEMP ALARM`; còi chưa tắt mà tiếp tục hú đủ thời gian xác minh.
 7. **`TEMP ALARM` (Xác minh báo động - 30s):** Sau khi nhập đúng PIN trong trạng thái báo động, còi vẫn hú liên tục đủ 30s và không nhận PIN thứ hai để thoát sớm. Hết 30s: chỉ cần cửa đóng $\rightarrow$ tự động `ARMED`; nếu cửa vẫn mở $\rightarrow$ quay lại `ALARM EMERGE`.
 
-Mã PIN có đúng 4 chữ số. Sau 5 lần xác nhận sai, bàn phím bị khóa 30 giây; trong thời gian khóa, cảm biến và các bộ đếm thời gian vẫn tiếp tục hoạt động bình thường.
+Mã PIN có đúng 4 chữ số. Sau 5 lần xác nhận sai, bàn phím bị khóa 30 giây; trong thời gian khóa, cảm biến và các bộ đếm thời gian vẫn tiếp tục hoạt động bình thường. Trong mỗi trạng thái, PIN đúng được xử lý trước các sự kiện cảm biến cùng chu kỳ; riêng `TEMP_ALARM` không nhận thêm PIN và chỉ thoát theo rung mạnh hoặc timeout 30 giây.
 
 ---
 
@@ -135,7 +138,7 @@ Mã PIN có đúng 4 chữ số. Sau 5 lần xác nhận sai, bàn phím bị kh
 | **TC03** | `EXIT DELAY` | Nhập mã PIN giải trừ | Hủy ngay chu trình đếm lùi $\rightarrow$ Trở về **`DISARM`**. |
 | **TC04** | `ARMED` | PIR hoặc rung nhẹ | Chuyển sang **`ENTRY_DELAY`** 30s. Cửa mở hoặc rung mạnh chuyển ngay sang `ALARM_EMERGE`. |
 | **TC05** | `ENTRY DELAY` | Nhập đúng mã PIN trước 30s | Chuyển sang **`TEMP DISARM`** (60s). |
-| **TC06** | `ENTRY DELAY` | Hết 30s mà chưa nhập đúng PIN | Kích hoạt tức thì **`ALARM EMERGE`** (Còi hú toàn lực + Ghi thẻ SD). |
+| **TC06** | `ENTRY DELAY` | Hết 30s mà chưa nhập đúng PIN | Kích hoạt tức thì **`ALARM EMERGE`**; còi hú và sự kiện được enqueue để ghi SD ở cửa sổ I/O an toàn tiếp theo. |
 | **TC07** | `ENTRY DELAY` | Cửa mở, rung mạnh hoặc hết thời gian nhập PIN | Chuyển thẳng sang **`ALARM EMERGE`**. PIR không làm ngắt sớm khoảng trễ. |
 | **TC08** | `TEMP DISARM` | Hết 60s và Cửa đã đóng lại | Tự động kích hoạt lại trạng thái **`ARMED`**. |
 | **TC09** | `TEMP DISARM` | Hết 60s nhưng Cửa vẫn để mở | Kích hoạt **`ALARM EMERGE`** báo động quên đóng cửa. |
@@ -166,15 +169,16 @@ Mã PIN có đúng 4 chữ số. Sau 5 lần xác nhận sai, bàn phím bị kh
   * **Cửa Mở (`Reed == 1`):** Ngắt phân tích rung để tránh hiện tượng gió lùa đập cánh cửa gây báo động rung giả.
 
 ### 5.3. Cảm Biến Chuyển Động Thân Nhiệt PIR (HC-SR501)
-* **Thời gian Warm-up 30s:** Trong 30 giây đầu tiên khởi động (`PIR_WARMUP_MS = 30000`), hệ thống tự động khóa ngắt để đầu dò ổn định bề mặt nhiệt điện.
+* **Thời gian warm-up 30s:** Trong 30 giây đầu tiên (`PIR_WARMUP_MS = 30000`), tín hiệu PIR chưa được đưa vào FSM.
 * **Lọc mức OUT:** Firmware lấy mẫu cả HIGH và LOW; một mức chỉ được chấp nhận sau khi ổn định 200 ms, thay vì bật bằng cạnh lên rồi tắt theo bộ giữ 1,5 giây riêng.
 * **Bám blocking time:** Khi OUT xuống LOW, trạng thái PIR vẫn giữ ON thêm 2,5 giây. Chỉ khi LOW liên tục hết khoảng này mới công bố OFF; nếu OUT lên HIGH lại thì hủy pha chờ tắt.
 * **UART chẩn đoán 1 Hz:** Mỗi giây in `raw`, `filtered` và `phase` (`WARMUP`, `READY`, `ACTIVE`, `BLOCKING`) để phân biệt xung vật lý của module với tín hiệu đã đưa vào FSM.
 * **Cấu hình phần cứng bắt buộc:**
   * Cắm Jumper trên module sang vị trí **`H`** (Repeatable Trigger) để tín hiệu OUT giữ mức HIGH liên tục khi có người di chuyển.
   * Cấp nguồn VCC vào chân **`5V`** (không cắm 3.3V vì sẽ gây sụt áp IC ổn áp 7133).
-  * Vặn chiết áp *Sensitivity* ngược chiều kim đồng hồ để giảm khoảng cách phát hiện xuống $2 - 3\text{m}$.
-* **Thuật toán Khóa trạng thái (Hold Latch 1.5s):** Giữ trạng thái phát hiện tối thiểu 1.5 giây và tự động gia hạn khi người dùng vẫn đang chuyển động, loại bỏ hoàn toàn hiện tượng chớp tắt tín hiệu.
+  * Bắt đầu với *Sensitivity* gần `MIN`, sau đó tăng từng bước nhỏ đến vùng quét cần thiết; không suy đoán chiều xoay nếu PCB không in `MIN/MAX` vì có nhiều phiên bản module.
+  * Chỉnh *Time Delay* để OUT giữ HIGH khoảng 5–10 giây trong bài thử; UART 1 Hz khi đó phải có nhiều dòng `raw=HIGH` liên tiếp.
+* **Giới hạn hiện tại:** Bộ lọc 200 ms loại các xung HIGH quá ngắn. Nếu UART thỉnh thoảng hiện `raw=HIGH` nhưng `filtered=OFF`, đó là xung chưa đủ thời gian xác nhận, không phải FSM tự đảo trạng thái. Blocking 2,5 giây không đồng nghĩa với thời gian xác nhận “khu vực đã yên tĩnh” dài hạn.
 
 ---
 
@@ -189,11 +193,13 @@ Intrusion-Alarm-System/
 ├── startup_stm32f103xb.s       # File khởi động Assembly của vi điều khiển
 ├── build_and_flash.bat         # Script tự động build & flash nhanh trên Windows
 ├── .gitignore                  # Bộ lọc loại bỏ file build trung gian
+├── .gitattributes              # Chuẩn hóa LF/CRLF và nhận diện file binary
 ├── README.md                   # Tài liệu toàn diện của dự án
 ├── Core/
 │   ├── Inc/                    # Các file Header khai báo (.h)
 │   │   ├── main.h              # Định nghĩa chân I/O và nguyên mẫu hàm
 │   │   ├── sensors.h           # Header driver phân loại rung & cảm biến
+│   │   ├── time_utils.h        # So sánh tick/deadline an toàn khi uint32_t tràn
 │   │   ├── keypad.h            # Header driver bàn phím ma trận 4x4
 │   │   ├── ssd1306.h           # Header driver OLED SH1106 / SSD1306
 │   │   ├── fonts.h             # Header phông chữ ma trận (Font 7x10, 11x18)
@@ -220,31 +226,55 @@ Intrusion-Alarm-System/
 ## 7. HƯỚNG DẪN BIÊN DỊCH (BUILD) & NẠP CODE (FLASH)
 
 ### Cách 1: Sử Dụng Script Tự Động (`build_and_flash.bat`)
-Chạy file script `build_and_flash.bat` bằng cách nhấp đúp chuột hoặc gõ lệnh trong Windows Terminal:
+Yêu cầu máy Windows đã cài và đưa vào `PATH`: CMake, Ninja, GNU Arm Embedded Toolchain. STM32CubeProgrammer CLI có thể nằm trong `PATH` hoặc thư mục cài đặt mặc định dưới `Program Files`.
+
+Chạy script bằng cách nhấp đúp hoặc từ Windows Terminal:
+
 ```cmd
 build_and_flash.bat
 ```
-*Script sẽ tự động gọi CMake + Ninja để biên dịch và dùng STM32CubeProgrammer CLI để nạp trực tiếp qua ST-Link (chế độ Under Reset).*
+
+Script sẽ:
+
+1. Chuyển về đúng thư mục dự án và kiểm tra toolchain.
+2. Cấu hình/build preset `Debug` tại `build\Debug`.
+3. Sinh đồng thời `Prj2008.elf`, `Prj2008.hex`, `Prj2008.bin` và `Prj2008.map` sau mỗi lần link.
+4. Liệt kê ST-Link và hỏi serial trước khi nạp. Chỉ để trống khi máy có đúng một probe.
+5. Nạp `build\Debug\Prj2008.elf`, verify và reset MCU.
+
+Có thể truyền serial của probe cần dùng qua tham số đầu tiên hoặc biến môi trường; serial không được lưu trong repository:
+
+```cmd
+build_and_flash.bat YOUR_STLINK_SERIAL
+```
+
+```cmd
+set STLINK_SN=YOUR_STLINK_SERIAL
+build_and_flash.bat
+```
 
 ### Cách 2: Sử Dụng Lệnh CMake & Ninja Thủ Công
-1. **Cấu hình dự án (Chỉ chạy lần đầu):**
-   ```bash
-   cmake -B build -G "Ninja" -DCMAKE_TOOLCHAIN_FILE="cmake/gcc-arm-none-eabi.cmake"
+1. **Cấu hình preset Debug:**
+   ```cmd
+   cmake --preset Debug
    ```
 2. **Biên dịch mã nguồn (Build):**
-   ```bash
-   cmake --build build
+   ```cmd
+   cmake --build --preset Debug
    ```
-3. **Nạp Firmware (Flash qua ST-Link):**
-   ```bash
-   STM32_Programmer_CLI.exe -c port=SWD mode=UR -w build/Prj2008.elf -v -rst
+3. **Liệt kê probe và nạp đúng ST-Link:**
+   ```cmd
+   STM32_Programmer_CLI.exe -l stlink
+   STM32_Programmer_CLI.exe -c port=SWD sn=YOUR_STLINK_SERIAL freq=100 -w build\Debug\Prj2008.elf -v -rst
    ```
+
+Không nạp một file HEX/ELF cũ từ layout `build\` cấp trên. Artifact chuẩn của dự án luôn nằm trong `build\Debug\` (hoặc `build\Release\` khi chủ động dùng preset Release).
 
 ---
 
 ## 8. HƯỚNG DẪN ĐỌC LOG DEBUG QUA UART
 
-1. Cắm cáp chuyển đổi USB-to-UART (hoặc chân Virtual COM của ST-Link) vào máy tính:
+1. Cắm USB-to-UART vào máy tính:
    * Chân **`PA9`** (TX) của STM32 nối vào chân **`RX`** của mạch USB-to-UART.
    * Chân **`GND`** nối chung với GND máy tính.
 2. Mở phần mềm Serial Monitor (PuTTY, Hercules, TeraTerm, hoặc Serial Monitor trên VS Code / STM32CubeIDE).
@@ -267,4 +297,9 @@ build_and_flash.bat
    [12079ms] VIB window=8 level=LIGHT
    [14079ms] VIB window=23 level=HEAVY
    [SENSOR] PIR: Motion DETECTED!
+   [PIR] raw=HIGH filtered=ON phase=ACTIVE
+   [PIR] raw=LOW filtered=ON phase=BLOCKING
+   [PIR] raw=LOW filtered=OFF phase=READY
    ```
+
+Các pha PIR có ý nghĩa: `WARMUP` chưa đưa tín hiệu vào FSM; `READY` đang chờ; `ACTIVE` đã xác nhận chuyển động; `BLOCKING` chân OUT đã LOW nhưng trạng thái lọc vẫn ON trong 2,5 giây. Không mở đồng thời COM bằng hai phần mềm vì một ứng dụng sẽ giữ độc quyền cổng UART.
