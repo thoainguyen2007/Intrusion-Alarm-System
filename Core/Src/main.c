@@ -48,7 +48,9 @@
 /* USER CODE BEGIN PD */
 #define PIR_WARMUP_MS         30000   /* Thời gian khởi động cảm biến PIR (30 giây) */
 #define REED_DEBOUNCE_MS      50      /* Chống dội tiếp điểm từ cửa (50ms) */
-#define PIR_DEBOUNCE_MS       200     /* Chống dội PIR (200ms) */
+#define PIR_STABLE_MS         200U    /* Mức OUT phải ổn định trước khi chấp nhận */
+#define PIR_BLOCKING_MS       2500U   /* HC-SR501: giữ ON qua khoảng khóa sau xung */
+#define PIR_REPORT_MS         1000U   /* Chu kỳ báo trạng thái PIR qua UART */
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -80,11 +82,16 @@ static volatile uint8_t reed_debounce_pending = 0;
 static volatile uint32_t reed_edge_tick = 0;
 uint8_t was_reed_triggered = 0; /* Lưu trạng thái cửa ở chu kỳ trước */
 
-/* Biến cảm biến Chuyển động PIR có Warm-up & Lọc giữ trạng thái (Hold Latch) */
-volatile uint8_t pir_triggered = 0;
-volatile uint32_t pir_hold_tick = 0;
+/* HC-SR501: lọc mức OUT và bám blocking time hoàn toàn không chặn main loop. */
+uint8_t pir_triggered = 0;
 uint8_t was_pir_triggered = 0;
-static volatile uint8_t pir_ready = 0;
+static uint8_t pir_ready = 0;
+static GPIO_PinState pir_stable_level = GPIO_PIN_RESET;
+static GPIO_PinState pir_candidate_level = GPIO_PIN_RESET;
+static uint32_t pir_candidate_tick = 0;
+static uint8_t pir_blocking = 0;
+static uint32_t pir_blocking_tick = 0;
+static uint32_t pir_report_tick = 0;
 
 /* Trạng thái phím vừa bấm */
 char last_key = '-';
@@ -117,18 +124,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     reed_edge_tick = now;
     reed_debounce_pending = 1U;
   }
-  /* 3. Cảm biến Chuyển Động PIR: Khóa trong giai đoạn Warm-up 30s & Giữ trạng thái ổn định */
-  else if (GPIO_Pin == PIR_IN_Pin)
-  {
-    if (pir_ready)
-    {
-      if (HAL_GPIO_ReadPin(PIR_IN_GPIO_Port, PIR_IN_Pin) == GPIO_PIN_SET)
-      {
-        pir_triggered = 1;
-        pir_hold_tick = now + 1500; /* Khóa giữ trạng thái phát hiện ít nhất 1.5 giây */
-      }
-    }
-  }
+  /* PIR được lấy mẫu hai mức trong main để lọc cả cạnh lên và cạnh xuống. */
 }
 
 static void Reed_ProcessDebounce(uint32_t now)
@@ -148,6 +144,75 @@ static void Reed_ProcessDebounce(uint32_t now)
   __set_PRIMASK(primask);
 
   if (update) reed_triggered = stable_state;
+}
+
+static void PIR_Process(uint32_t now)
+{
+  GPIO_PinState raw = HAL_GPIO_ReadPin(PIR_IN_GPIO_Port, PIR_IN_Pin);
+
+  if (!pir_ready)
+  {
+    if (Time_HasElapsed(now, 0U, PIR_WARMUP_MS))
+    {
+      pir_ready = 1U;
+      pir_stable_level = GPIO_PIN_RESET;
+      pir_candidate_level = raw;
+      pir_candidate_tick = now;
+      printf("[SENSOR] PIR: Warm-up Complete (30s). Motion monitoring ACTIVE!\r\n");
+    }
+  }
+  else
+  {
+    if (raw != pir_candidate_level)
+    {
+      pir_candidate_level = raw;
+      pir_candidate_tick = now;
+    }
+
+    if ((pir_candidate_level != pir_stable_level) &&
+        Time_HasElapsed(now, pir_candidate_tick, PIR_STABLE_MS))
+    {
+      pir_stable_level = pir_candidate_level;
+      if (pir_stable_level == GPIO_PIN_SET)
+      {
+        pir_blocking = 0U;
+        pir_triggered = 1U;
+      }
+      else if (pir_triggered)
+      {
+        pir_blocking = 1U;
+        pir_blocking_tick = now;
+      }
+    }
+
+    if (pir_blocking)
+    {
+      if (pir_stable_level == GPIO_PIN_SET)
+      {
+        pir_blocking = 0U;
+      }
+      else if (Time_HasElapsed(now, pir_blocking_tick, PIR_BLOCKING_MS))
+      {
+        pir_blocking = 0U;
+        pir_triggered = 0U;
+      }
+    }
+  }
+
+  if (pir_triggered && !was_pir_triggered)
+    printf("[SENSOR] PIR: Motion DETECTED!\r\n");
+  else if (!pir_triggered && was_pir_triggered)
+    printf("[SENSOR] PIR: Motion Ended (Quiet).\r\n");
+  was_pir_triggered = pir_triggered;
+
+  if (Time_HasElapsed(now, pir_report_tick, PIR_REPORT_MS))
+  {
+    pir_report_tick = now;
+    printf("[PIR] raw=%s filtered=%s phase=%s\r\n",
+           (raw == GPIO_PIN_SET) ? "HIGH" : "LOW",
+           pir_triggered ? "ON" : "OFF",
+           !pir_ready ? "WARMUP" : (pir_blocking ? "BLOCKING" : (pir_triggered ? "ACTIVE" : "READY")));
+  }
 }
 /* USER CODE END 0 */
 
@@ -264,7 +329,9 @@ int main(void)
   SD_Logger_Init(sd_storage_ready);
 
   /* Khởi tạo màn hình OLED SH1106 1.3 inch */
-  SSD1306_Init(&hi2c1);
+  uint8_t oled_ready = SSD1306_Init(&hi2c1);
+  printf("[OLED] SH1106 1.3in address 0x78: %s\r\n",
+         oled_ready ? "OK" : "NOT FOUND");
   SSD1306_Fill(SSD1306_COLOR_BLACK);
   SSD1306_GotoXY(10, 8);
   SSD1306_Puts("INTRUSION ALARM", &Font_7x10, SSD1306_COLOR_WHITE);
@@ -316,35 +383,7 @@ int main(void)
     was_reed_triggered = reed_triggered;
 
     /* --- TÁC VỤ 3: Xử lý Cảm biến Thân nhiệt PIR (HC-SR501) --- */
-    if (!pir_ready && Time_HasElapsed(now, 0U, PIR_WARMUP_MS))
-    {
-      pir_ready = 1U;
-      printf("[SENSOR] PIR: Warm-up Complete (30s). Motion monitoring ACTIVE!\r\n");
-    }
-
-    /* Tự động xóa trạng thái PIR khi chân đã về mức LOW và đã hết thời gian hold */
-    if (pir_triggered && Time_DeadlineReached(now, pir_hold_tick))
-    {
-      if (HAL_GPIO_ReadPin(PIR_IN_GPIO_Port, PIR_IN_Pin) == GPIO_PIN_RESET)
-      {
-        pir_triggered = 0;
-      }
-      else
-      {
-        /* Nếu người vẫn đang chuyển động trước cảm biến, gia hạn tiếp 1s */
-        pir_hold_tick = now + 1000;
-      }
-    }
-
-    if (pir_triggered == 1 && was_pir_triggered == 0)
-    {
-      printf("[SENSOR] PIR: Motion DETECTED!\r\n");
-    }
-    else if (pir_triggered == 0 && was_pir_triggered == 1)
-    {
-      printf("[SENSOR] PIR: Motion Ended (Quiet).\r\n");
-    }
-    was_pir_triggered = pir_triggered;
+    PIR_Process(now);
 
     /* --- TÁC VỤ 4: Đánh giá cửa sổ phân loại rung SW-420 mỗi 1.0 giây --- */
     if (Time_HasElapsed(now, last_vib_window_tick, VIB_WINDOW_MS))
