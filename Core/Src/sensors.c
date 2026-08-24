@@ -1,7 +1,9 @@
 #include "sensors.h"
+#include "time_utils.h"
 #include <stdio.h>
 
-static uint32_t vibPulseCount = 0;
+/* Updated in EXTI2 and consumed in the main loop. */
+static volatile uint32_t vibPulseCount = 0;
 static uint32_t last_vib_pulse_tick = 0;
 static VibLevel_t lastVibLevel = VIB_NONE;
 
@@ -11,7 +13,7 @@ static VibLevel_t lastVibLevel = VIB_NONE;
 void Sensors_Vib_EXTI_Callback(void)
 {
     uint32_t now = HAL_GetTick();
-    if (now - last_vib_pulse_tick >= VIB_GLITCH_FILTER_MS)
+    if (Time_HasElapsed(now, last_vib_pulse_tick, VIB_GLITCH_FILTER_MS))
     {
         vibPulseCount++;
         last_vib_pulse_tick = now;
@@ -23,7 +25,10 @@ void Sensors_Vib_EXTI_Callback(void)
  */
 void Vibration_Reset(void)
 {
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
     vibPulseCount = 0;
+    __set_PRIMASK(primask);
     lastVibLevel = VIB_NONE;
 }
 
@@ -40,7 +45,11 @@ VibLevel_t Vibration_GetLevel(void)
  */
 uint32_t Vibration_GetPulseCount(void)
 {
-    return vibPulseCount;
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    uint32_t count = vibPulseCount;
+    __set_PRIMASK(primask);
+    return count;
 }
 
 /**
@@ -49,7 +58,12 @@ uint32_t Vibration_GetPulseCount(void)
  */
 void Sensors_Process_Window(bool isDoorClosed)
 {
+    /* Snapshot and clear atomically so an EXTI pulse cannot be lost. */
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
     uint32_t currentPulses = vibPulseCount;
+    vibPulseCount = 0;
+    __set_PRIMASK(primask);
     
     #if CALIBRATION_MODE == 1
     /* Chế độ Calibration: Chỉ in ra số xung thu được khi cửa đóng để khảo sát ngưỡng thực tế */
@@ -80,6 +94,4 @@ void Sensors_Process_Window(bool isDoorClosed)
     }
     #endif
 
-    /* Cuối cửa sổ 1s: Luôn luôn reset bộ đếm cho dù cửa đóng hay mở */
-    vibPulseCount = 0;
 }

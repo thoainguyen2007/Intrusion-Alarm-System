@@ -13,9 +13,9 @@
 #include <string.h>
 #include <stdlib.h>
 
-/* I2C OLED Address (0x78 or 0x7A) */
+/* SH1106 1.3": 7-bit address 0x3C, shifted HAL address 0x78. */
 #ifndef SSD1306_I2C_ADDR
-#define SSD1306_I2C_ADDR        0x78
+#define SSD1306_I2C_ADDR        (0x3CU << 1)
 #endif
 
 /* OLED dimensions */

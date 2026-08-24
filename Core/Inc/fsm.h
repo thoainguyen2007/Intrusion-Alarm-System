@@ -10,7 +10,10 @@
 /*                        CẤU HÌNH THAM SỐ HỆ THỐNG                     */
 /* ==================================================================== */
 #define DEFAULT_PIN             "1234"      /* Mã PIN mặc định để ARM / DISARM */
-#define PIN_MAX_LEN             6           /* Độ dài tối đa của mã PIN */
+#define PIN_LENGTH              4U          /* Mã PIN hệ thống có đúng 4 chữ số */
+#define PIN_MAX_LEN             PIN_LENGTH
+#define PIN_MAX_FAILED_ATTEMPTS 5U          /* Khóa bàn phím sau 5 lần nhập sai */
+#define PIN_LOCKOUT_MS          30000U       /* Thời gian khóa bàn phím: 30 giây */
 
 #define EXIT_DELAY_MS           15000       /* Thời gian trễ rời nhà (15 giây) */
 #define ENTRY_DELAY_MS          30000       /* Thời gian trễ vào nhà nhập mã (30 giây) */

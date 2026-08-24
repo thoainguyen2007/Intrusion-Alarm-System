@@ -3,27 +3,33 @@
 #include "tim.h"
 #include "ssd1306.h"
 #include "fonts.h"
-#include "fatfs.h"
+#include "sd_logger.h"
+#include "time_utils.h"
 #include <stdio.h>
 #include <string.h>
 
 /* ==================================================================== */
 /*                    ĐIỀU KHIỂN CÒI BUZZER TIMER PWM (PA8)             */
 /* ==================================================================== */
+static bool buzzer_on = false;
+
 void Buzzer_Init(void)
 {
     HAL_TIM_PWM_Stop(&htim1, TIM_CHANNEL_1);
+    buzzer_on = false;
 }
 
 void Buzzer_SetState(bool on)
 {
+    if (on == buzzer_on) return;
+
     if (on)
     {
-        HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
+        if (HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1) == HAL_OK) buzzer_on = true;
     }
     else
     {
-        HAL_TIM_PWM_Stop(&htim1, TIM_CHANNEL_1);
+        if (HAL_TIM_PWM_Stop(&htim1, TIM_CHANNEL_1) == HAL_OK) buzzer_on = false;
     }
 }
 
@@ -36,6 +42,9 @@ static uint32_t state_start_tick = 0;
 /* Bộ đệm nhập mã PIN từ Keypad */
 static char pin_buffer[PIN_MAX_LEN + 1];
 static uint8_t pin_idx = 0;
+static uint8_t failed_pin_attempts = 0;
+static bool pin_locked = false;
+static uint32_t pin_lockout_deadline = 0;
 
 /* Biến thông báo lỗi tạm thời lên màn hình OLED */
 static char error_banner[32] = "";
@@ -50,40 +59,10 @@ static uint32_t last_led_tick = 0;
 /* ==================================================================== */
 static void SD_Log_Event(const char *event_msg)
 {
-    /* In log ra UART1 trước */
     printf("[LOG] %s\r\n", event_msg);
-
-    /* Ghi đồng bộ sự kiện vào LOG.TXT để dữ liệu bền vững sau khi mất nguồn. */
-    FIL file;
-    FRESULT res = f_open(&file, "0:LOG.TXT", FA_OPEN_ALWAYS | FA_WRITE);
-    if (res == FR_OK)
-    {
-        char log_line[128];
-        int line_length = snprintf(log_line, sizeof(log_line),
-                                   "[%lums] %s\r\n", HAL_GetTick(), event_msg);
-        UINT bytes_written = 0U;
-        UINT bytes_to_write = (line_length > 0 && line_length < (int)sizeof(log_line))
-                            ? (UINT)line_length : 0U;
-
-        res = f_lseek(&file, f_size(&file));
-        if (res == FR_OK && bytes_to_write != 0U)
-            res = f_write(&file, log_line, bytes_to_write, &bytes_written);
-        if (res == FR_OK && bytes_written == bytes_to_write)
-            res = f_sync(&file);
-
-        FRESULT close_res = f_close(&file);
-        if (res == FR_OK && close_res != FR_OK) res = close_res;
-
-        if (res == FR_OK && bytes_written == bytes_to_write)
-            printf("[FATFS] Append LOG.TXT: OK (%u bytes)\r\n", bytes_written);
-        else
-            printf("[FATFS] Append LOG.TXT failed (FR=%u, %u/%u bytes)\r\n",
-                   (unsigned int)res, bytes_written, bytes_to_write);
-    }
-    else
-    {
-        printf("[FATFS] Open LOG.TXT failed (FR=%u)\r\n", (unsigned int)res);
-    }
+    if (!SD_Logger_Enqueue(event_msg))
+        printf("[FATFS] Log queue full/invalid, dropped=%lu\r\n",
+               SD_Logger_GetDroppedCount());
 }
 
 /* ==================================================================== */
@@ -96,6 +75,61 @@ static void FSM_SetError(const char *msg, uint32_t duration_ms)
     printf("[ERROR] %s\r\n", msg);
 }
 
+static void FSM_ClearPin(void)
+{
+    pin_idx = 0;
+    pin_buffer[0] = '\0';
+}
+
+static void FSM_TransitionTo(SystemState_t next_state, uint32_t now, const char *reason)
+{
+    if (next_state == currentState) return;
+
+    currentState = next_state;
+    state_start_tick = now;
+    last_buz_tick = now;
+    last_led_tick = now;
+    error_banner[0] = '\0';
+    FSM_ClearPin();
+    Vibration_Reset();
+
+    printf("\r\n[FSM] %s\r\n", reason);
+    SD_Log_Event(reason);
+}
+
+static void FSM_HandleWrongPin(uint32_t now)
+{
+    char message[32];
+
+    FSM_ClearPin();
+    failed_pin_attempts++;
+    snprintf(message, sizeof(message), "Wrong PIN attempt %u/%u",
+             failed_pin_attempts, (unsigned int)PIN_MAX_FAILED_ATTEMPTS);
+    SD_Log_Event(message);
+
+    if (failed_pin_attempts >= PIN_MAX_FAILED_ATTEMPTS)
+    {
+        failed_pin_attempts = 0;
+        pin_locked = true;
+        pin_lockout_deadline = now + PIN_LOCKOUT_MS;
+        FSM_SetError("PIN LOCKED 30s", PIN_LOCKOUT_MS);
+        SD_Log_Event("PIN keypad locked for 30s");
+    }
+    else
+    {
+        snprintf(message, sizeof(message), "WRONG PIN %u/%u",
+                 failed_pin_attempts, (unsigned int)PIN_MAX_FAILED_ATTEMPTS);
+        FSM_SetError(message, 1500U);
+    }
+}
+
+static uint32_t FSM_RemainingSeconds(uint32_t now, uint32_t duration_ms)
+{
+    uint32_t elapsed = now - state_start_tick;
+    if (elapsed >= duration_ms) return 0U;
+    return (duration_ms - elapsed + 999U) / 1000U;
+}
+
 /* ==================================================================== */
 /*                         KHỞI TẠO HỆ THỐNG FSM                        */
 /* ==================================================================== */
@@ -105,6 +139,9 @@ void FSM_Init(void)
     state_start_tick = HAL_GetTick();
     pin_idx = 0;
     pin_buffer[0] = '\0';
+    failed_pin_attempts = 0;
+    pin_locked = false;
+    pin_lockout_deadline = 0;
     error_banner[0] = '\0';
     error_banner_timeout = 0;
 
@@ -154,7 +191,7 @@ static void FSM_Update_Outputs(uint32_t now)
         case STATE_DISARM:
             /* Còi tắt. LED nháy nhịp tim chậm 0.5Hz (1000ms chu kỳ) */
             Buzzer_SetState(false);
-            if (now - last_led_tick >= 1000)
+            if (Time_HasElapsed(now, last_led_tick, 1000U))
             {
                 last_led_tick = now;
                 HAL_GPIO_TogglePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin);
@@ -163,16 +200,16 @@ static void FSM_Update_Outputs(uint32_t now)
 
         case STATE_EXIT_DELAY:
             /* Còi bíp chậm 1Hz (100ms ON / 900ms OFF). LED nhấp nháy 1Hz */
-            if (now - last_buz_tick >= 1000)
+            if (Time_HasElapsed(now, last_buz_tick, 1000U))
             {
                 last_buz_tick = now;
                 Buzzer_SetState(true);
             }
-            else if (now - last_buz_tick >= 100)
+            else if (Time_HasElapsed(now, last_buz_tick, 100U))
             {
                 Buzzer_SetState(false);
             }
-            if (now - last_led_tick >= 500)
+            if (Time_HasElapsed(now, last_led_tick, 500U))
             {
                 last_led_tick = now;
                 HAL_GPIO_TogglePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin);
@@ -182,12 +219,12 @@ static void FSM_Update_Outputs(uint32_t now)
         case STATE_ARMED:
             /* Còi tắt. LED nháy chớp ngắn tuần tra (50ms ON mỗi 1500ms) */
             Buzzer_SetState(false);
-            if (now - last_led_tick >= 1500)
+            if (Time_HasElapsed(now, last_led_tick, 1500U))
             {
                 last_led_tick = now;
                 HAL_GPIO_WritePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin, GPIO_PIN_RESET); /* BẬT LED */
             }
-            else if (now - last_led_tick >= 50)
+            else if (Time_HasElapsed(now, last_led_tick, 50U))
             {
                 HAL_GPIO_WritePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin, GPIO_PIN_SET);   /* TẮT LED */
             }
@@ -195,13 +232,13 @@ static void FSM_Update_Outputs(uint32_t now)
 
         case STATE_ENTRY_DELAY:
             /* Còi bíp dồn dập 4Hz (100ms ON / 150ms OFF). LED chớp nhanh */
-            if (now - last_buz_tick >= 250)
+            if (Time_HasElapsed(now, last_buz_tick, 250U))
             {
                 last_buz_tick = now;
                 Buzzer_SetState(true);
                 HAL_GPIO_WritePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin, GPIO_PIN_RESET);
             }
-            else if (now - last_buz_tick >= 100)
+            else if (Time_HasElapsed(now, last_buz_tick, 100U))
             {
                 Buzzer_SetState(false);
                 HAL_GPIO_WritePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin, GPIO_PIN_SET);
@@ -211,7 +248,7 @@ static void FSM_Update_Outputs(uint32_t now)
         case STATE_TEMP_DISARM:
             /* Còi tắt. LED chớp đúp 2 nhịp */
             Buzzer_SetState(false);
-            if (now - last_led_tick >= 1000)
+            if (Time_HasElapsed(now, last_led_tick, 1000U))
             {
                 last_led_tick = now;
                 HAL_GPIO_TogglePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin);
@@ -221,7 +258,7 @@ static void FSM_Update_Outputs(uint32_t now)
         case STATE_ALARM_EMERGE:
             /* CÒI HÚ CỰC ĐẠI: Bật liên tục bằng PWM. LED chớp 10Hz */
             Buzzer_SetState(true);
-            if (now - last_led_tick >= 50)
+            if (Time_HasElapsed(now, last_led_tick, 50U))
             {
                 last_led_tick = now;
                 HAL_GPIO_TogglePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin);
@@ -229,17 +266,9 @@ static void FSM_Update_Outputs(uint32_t now)
             break;
 
         case STATE_TEMP_ALARM:
-            /* Còi bíp ngắt quãng 1s Kêu / 1s Nghỉ để kiểm tra hiện trường */
-            if (now - last_buz_tick >= 2000)
-            {
-                last_buz_tick = now;
-                Buzzer_SetState(true);
-            }
-            else if (now - last_buz_tick >= 1000)
-            {
-                Buzzer_SetState(false);
-            }
-            if (now - last_led_tick >= 500)
+            /* Sau khi xác thực báo động, còi vẫn hú đủ 30s để kiểm tra hiện trường. */
+            Buzzer_SetState(true);
+            if (Time_HasElapsed(now, last_led_tick, 500U))
             {
                 last_led_tick = now;
                 HAL_GPIO_TogglePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin);
@@ -254,10 +283,10 @@ static void FSM_Update_Outputs(uint32_t now)
 static void GetMaskedPin(char *dest, size_t dest_size)
 {
     uint8_t i;
-    for (i = 0; i < pin_idx && i < 4 && i < dest_size - 1; i++) {
+    for (i = 0; i < pin_idx && i < PIN_LENGTH && i < dest_size - 1; i++) {
         dest[i] = '*';
     }
-    for (; i < 4 && i < dest_size - 1; i++) {
+    for (; i < PIN_LENGTH && i < dest_size - 1; i++) {
         dest[i] = '_';
     }
     dest[i] = '\0';
@@ -266,7 +295,7 @@ static void GetMaskedPin(char *dest, size_t dest_size)
 static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_motion, VibLevel_t vib_level)
 {
     static uint32_t last_render_tick = 0;
-    if (now - last_render_tick < 100) return; /* 10 FPS làm mới */
+    if (!Time_HasElapsed(now, last_render_tick, 100U)) return; /* 10 FPS làm mới */
     last_render_tick = now;
 
     SSD1306_Fill(SSD1306_COLOR_BLACK);
@@ -281,12 +310,12 @@ static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_motion, VibLe
     SSD1306_DrawLine(0, 13, 127, 13, SSD1306_COLOR_WHITE);
 
     /* 2. Kiểm tra nếu đang có banner lỗi thì ưu tiên hiển thị */
-    if (now < error_banner_timeout)
+    if (error_banner[0] != '\0' && !Time_DeadlineReached(now, error_banner_timeout))
     {
         SSD1306_GotoXY(2, 22);
         SSD1306_Puts(error_banner, &Font_7x10, SSD1306_COLOR_WHITE);
         SSD1306_GotoXY(2, 44);
-        SSD1306_Puts("Press any key...", &Font_7x10, SSD1306_COLOR_WHITE);
+        SSD1306_Puts(pin_locked ? "Please wait..." : "Press any key...", &Font_7x10, SSD1306_COLOR_WHITE);
         SSD1306_UpdateScreen();
         return;
     }
@@ -308,8 +337,7 @@ static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_motion, VibLe
 
         case STATE_EXIT_DELAY:
         {
-            uint32_t elapsed = now - state_start_tick;
-            uint32_t remain = (elapsed < EXIT_DELAY_MS) ? ((EXIT_DELAY_MS - elapsed) / 1000) : 0;
+            uint32_t remain = FSM_RemainingSeconds(now, EXIT_DELAY_MS);
             SSD1306_GotoXY(2, 16);
             snprintf(buf, sizeof(buf), "LEAVE HOME: %2lus", remain);
             SSD1306_Puts(buf, &Font_7x10, SSD1306_COLOR_WHITE);
@@ -334,8 +362,7 @@ static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_motion, VibLe
 
         case STATE_ENTRY_DELAY:
         {
-            uint32_t elapsed = now - state_start_tick;
-            uint32_t remain = (elapsed < ENTRY_DELAY_MS) ? ((ENTRY_DELAY_MS - elapsed) / 1000) : 0;
+            uint32_t remain = FSM_RemainingSeconds(now, ENTRY_DELAY_MS);
             SSD1306_GotoXY(2, 16);
             snprintf(buf, sizeof(buf), "ENTER PIN: %2lus", remain);
             SSD1306_Puts(buf, &Font_7x10, SSD1306_COLOR_WHITE);
@@ -349,8 +376,7 @@ static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_motion, VibLe
 
         case STATE_TEMP_DISARM:
         {
-            uint32_t elapsed = now - state_start_tick;
-            uint32_t remain = (elapsed < TEMP_DISARM_MS) ? ((TEMP_DISARM_MS - elapsed) / 1000) : 0;
+            uint32_t remain = FSM_RemainingSeconds(now, TEMP_DISARM_MS);
             SSD1306_GotoXY(2, 16);
             SSD1306_Puts("WELCOME HOME (60s)", &Font_7x10, SSD1306_COLOR_WHITE);
             SSD1306_GotoXY(2, 30);
@@ -374,8 +400,7 @@ static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_motion, VibLe
 
         case STATE_TEMP_ALARM:
         {
-            uint32_t elapsed = now - state_start_tick;
-            uint32_t remain = (elapsed < TEMP_ALARM_MS) ? ((TEMP_ALARM_MS - elapsed) / 1000) : 0;
+            uint32_t remain = FSM_RemainingSeconds(now, TEMP_ALARM_MS);
             SSD1306_GotoXY(2, 16);
             SSD1306_Puts("INSPECT AREA (30s)", &Font_7x10, SSD1306_COLOR_WHITE);
             SSD1306_GotoXY(2, 30);
@@ -397,12 +422,21 @@ static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_motion, VibLe
 void FSM_Process(char key_pressed, bool door_open, bool pir_motion, VibLevel_t vib_level)
 {
     uint32_t now = HAL_GetTick();
-
-    /* ------------------------------------------------------------- */
-    /* 1. Xử lý nhập phím từ Keypad                                  */
-    /* ------------------------------------------------------------- */
     bool pin_submitted = false;
-    if (key_pressed != 0 && key_pressed != '-')
+    bool is_pin_correct = false;
+
+    /* Lockout chỉ chặn bàn phím; cảm biến và timeout vẫn luôn hoạt động. */
+    if (pin_locked && Time_DeadlineReached(now, pin_lockout_deadline))
+    {
+        pin_locked = false;
+        failed_pin_attempts = 0;
+        error_banner[0] = '\0';
+        FSM_ClearPin();
+        SD_Log_Event("PIN keypad lockout expired");
+    }
+
+    if (!pin_locked && currentState != STATE_TEMP_ALARM &&
+        key_pressed != 0 && key_pressed != '-')
     {
         if (key_pressed >= '0' && key_pressed <= '9')
         {
@@ -414,284 +448,171 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_motion, VibLevel_t v
         }
         else if (key_pressed == '*')
         {
-            /* Phím * : Xóa mã PIN */
-            pin_idx = 0;
-            pin_buffer[0] = '\0';
+            FSM_ClearPin();
         }
         else if (key_pressed == '#')
         {
-            /* Phím # : Xác nhận mã PIN */
             pin_submitted = true;
+            is_pin_correct = (pin_idx == PIN_LENGTH &&
+                              strcmp(pin_buffer, DEFAULT_PIN) == 0);
+            if (is_pin_correct) failed_pin_attempts = 0;
         }
     }
 
-    bool is_pin_correct = (pin_submitted && strcmp(pin_buffer, DEFAULT_PIN) == 0);
-
-    /* ------------------------------------------------------------- */
-    /* 2. Máy trạng thái 7-State FSM Logic                           */
-    /* ------------------------------------------------------------- */
+    /*
+     * Thứ tự ưu tiên:
+     * 1) PIN đúng để chủ nhà luôn dừng được hệ thống.
+     * 2) Rung mạnh, cảm biến và timeout.
+     * 3) Ghi nhận PIN sai sau cùng để không che mất sự kiện an ninh.
+     */
     switch (currentState)
     {
-        /* --- 1. STATE_DISARM --- */
         case STATE_DISARM:
-            if (pin_submitted)
+            if (is_pin_correct)
             {
-                if (is_pin_correct)
+                if (door_open)
                 {
-                    if (door_open)
-                    {
-                        FSM_SetError("ARM FAILED: Door Open!", 2000);
-                        SD_Log_Event("DISARM -> ARM Failed: Door Open");
-                    }
-                    else
-                    {
-                        currentState = STATE_EXIT_DELAY;
-                        state_start_tick = now;
-                        Vibration_Reset();
-                        printf("\r\n[FSM] State -> EXIT_DELAY (15s)\r\n");
-                        SD_Log_Event("State -> EXIT_DELAY (15s)");
-                    }
+                    FSM_ClearPin();
+                    FSM_SetError("ARM FAILED: Door Open!", 2000U);
+                    SD_Log_Event("DISARM arm rejected: door open");
                 }
                 else
                 {
-                    FSM_SetError("WRONG PIN!", 1500);
+                    FSM_TransitionTo(STATE_EXIT_DELAY, now,
+                                     "DISARM -> EXIT_DELAY (valid PIN)");
                 }
-                pin_idx = 0; pin_buffer[0] = '\0';
             }
             break;
 
-        /* --- 2. STATE_EXIT_DELAY (15s) --- */
         case STATE_EXIT_DELAY:
-            if (pin_submitted)
+            if (is_pin_correct)
             {
-                if (is_pin_correct)
-                {
-                    currentState = STATE_DISARM;
-                    state_start_tick = now;
-                    Vibration_Reset();
-                    printf("\r\n[FSM] EXIT_DELAY Cancelled by PIN -> DISARM\r\n");
-                    SD_Log_Event("EXIT_DELAY Cancelled -> DISARM");
-                }
-                else
-                {
-                    FSM_SetError("WRONG PIN!", 1500);
-                }
-                pin_idx = 0; pin_buffer[0] = '\0';
+                FSM_TransitionTo(STATE_DISARM, now,
+                                 "EXIT_DELAY -> DISARM (cancelled by PIN)");
             }
-            else if (now - state_start_tick >= EXIT_DELAY_MS)
+            else if (Time_HasElapsed(now, state_start_tick, EXIT_DELAY_MS))
             {
-                if (!door_open)
+                if (door_open)
                 {
-                    currentState = STATE_ARMED;
-                    state_start_tick = now;
-                    Vibration_Reset();
-                    printf("\r\n[FSM] 15s Elapsed & Door Closed -> ARMED\r\n");
-                    SD_Log_Event("EXIT_DELAY Complete -> ARMED");
+                    FSM_TransitionTo(STATE_DISARM, now,
+                                     "EXIT_DELAY -> DISARM (door left open)");
+                    FSM_SetError("ARM FAILED: Door Open!", 2500U);
                 }
                 else
                 {
-                    currentState = STATE_DISARM;
-                    state_start_tick = now;
-                    Vibration_Reset();
-                    FSM_SetError("ARM FAILED: Door Open!", 2500);
-                    printf("\r\n[FSM] 15s Elapsed & Door OPEN -> ARM FAILED -> DISARM\r\n");
-                    SD_Log_Event("EXIT_DELAY Failed (Door Open) -> DISARM");
+                    FSM_TransitionTo(STATE_ARMED, now,
+                                     "EXIT_DELAY -> ARMED");
                 }
-                pin_idx = 0; pin_buffer[0] = '\0';
             }
             break;
 
-        /* --- 3. STATE_ARMED (Bảo vệ 24/7) --- */
         case STATE_ARMED:
-            if (pin_submitted)
+            if (is_pin_correct)
             {
-                if (is_pin_correct)
-                {
-                    currentState = STATE_DISARM;
-                    state_start_tick = now;
-                    Vibration_Reset();
-                    printf("\r\n[FSM] Disarmed by PIN -> DISARM\r\n");
-                    SD_Log_Event("ARMED -> DISARM (By PIN)");
-                }
-                else
-                {
-                    FSM_SetError("WRONG PIN!", 1500);
-                }
-                pin_idx = 0; pin_buffer[0] = '\0';
+                FSM_TransitionTo(STATE_DISARM, now,
+                                 "ARMED -> DISARM (valid PIN)");
             }
-            else
+            else if (vib_level == VIB_HEAVY)
             {
-                /* Nhánh Khẩn cấp: Cạy cửa hoặc Rung mạnh -> ALARM EMERGE */
-                if (door_open || vib_level == VIB_HEAVY)
-                {
-                    currentState = STATE_ALARM_EMERGE;
-                    state_start_tick = now;
-                    Vibration_Reset();
-                    printf("\r\n[FSM] CRITICAL INTRUSION (Door/Heavy Vib) -> ALARM_EMERGE\r\n");
-                    SD_Log_Event("ARMED -> ALARM_EMERGE (Door Open / Heavy Vib)");
-                    pin_idx = 0; pin_buffer[0] = '\0';
-                }
-                /* Nhánh Cảnh báo nhẹ: PIR hoặc Rung nhẹ -> ENTRY_DELAY (30s) */
-                else if (pir_motion || vib_level == VIB_LIGHT)
-                {
-                    currentState = STATE_ENTRY_DELAY;
-                    state_start_tick = now;
-                    Vibration_Reset();
-                    printf("\r\n[FSM] Motion/Light Vib Detected -> ENTRY_DELAY (30s)\r\n");
-                    SD_Log_Event("ARMED -> ENTRY_DELAY (PIR / Light Vib)");
-                    pin_idx = 0; pin_buffer[0] = '\0';
-                }
+                FSM_TransitionTo(STATE_ALARM_EMERGE, now,
+                                 "ARMED -> ALARM_EMERGE (heavy vibration)");
+            }
+            else if (door_open)
+            {
+                /* Cửa mở khi đã ARM là xâm nhập trực tiếp. */
+                FSM_TransitionTo(STATE_ALARM_EMERGE, now,
+                                 "ARMED -> ALARM_EMERGE (door opened)");
+            }
+            else if (pir_motion)
+            {
+                FSM_TransitionTo(STATE_ENTRY_DELAY, now,
+                                 "ARMED -> ENTRY_DELAY (PIR motion)");
+            }
+            else if (vib_level == VIB_LIGHT)
+            {
+                FSM_TransitionTo(STATE_ENTRY_DELAY, now,
+                                 "ARMED -> ENTRY_DELAY (light vibration)");
             }
             break;
 
-        /* --- 4. STATE_ENTRY_DELAY (30s) --- */
         case STATE_ENTRY_DELAY:
-            if (pin_submitted)
+            if (is_pin_correct)
             {
-                if (is_pin_correct)
-                {
-                    currentState = STATE_TEMP_DISARM;
-                    state_start_tick = now;
-                    Vibration_Reset();
-                    printf("\r\n[FSM] PIN Correct -> TEMP_DISARM (60s)\r\n");
-                    SD_Log_Event("ENTRY_DELAY -> TEMP_DISARM (60s)");
-                }
-                else
-                {
-                    FSM_SetError("WRONG PIN!", 1500);
-                }
-                pin_idx = 0; pin_buffer[0] = '\0';
+                FSM_TransitionTo(STATE_TEMP_DISARM, now,
+                                 "ENTRY_DELAY -> TEMP_DISARM (valid PIN)");
             }
-            else
+            else if (vib_level == VIB_HEAVY)
             {
-                /* Xâm nhập bạo lực hoặc hết 30s -> ALARM EMERGE */
-                if (vib_level == VIB_HEAVY || door_open)
-                {
-                    currentState = STATE_ALARM_EMERGE;
-                    state_start_tick = now;
-                    Vibration_Reset();
-                    printf("\r\n[FSM] Forced entry during Entry Delay -> ALARM_EMERGE\r\n");
-                    SD_Log_Event("ENTRY_DELAY -> ALARM_EMERGE (Forced Entry)");
-                    pin_idx = 0; pin_buffer[0] = '\0';
-                }
-                else if (now - state_start_tick >= ENTRY_DELAY_MS)
-                {
-                    currentState = STATE_ALARM_EMERGE;
-                    state_start_tick = now;
-                    Vibration_Reset();
-                    printf("\r\n[FSM] 30s Entry Delay Timeout -> ALARM_EMERGE\r\n");
-                    SD_Log_Event("ENTRY_DELAY -> ALARM_EMERGE (Timeout 30s)");
-                    pin_idx = 0; pin_buffer[0] = '\0';
-                }
+                FSM_TransitionTo(STATE_ALARM_EMERGE, now,
+                                 "ENTRY_DELAY -> ALARM_EMERGE (heavy vibration)");
             }
+            else if (door_open)
+            {
+                FSM_TransitionTo(STATE_ALARM_EMERGE, now,
+                                 "ENTRY_DELAY -> ALARM_EMERGE (door opened)");
+            }
+            else if (Time_HasElapsed(now, state_start_tick, ENTRY_DELAY_MS))
+            {
+                FSM_TransitionTo(STATE_ALARM_EMERGE, now,
+                                 "ENTRY_DELAY -> ALARM_EMERGE (timeout)");
+            }
+            /* PIR không làm đổi trạng thái; cửa mở luôn là xâm nhập. */
             break;
 
-        /* --- 5. STATE_TEMP_DISARM (60s) --- */
         case STATE_TEMP_DISARM:
-            if (pin_submitted)
+            if (is_pin_correct)
             {
-                if (is_pin_correct)
-                {
-                    currentState = STATE_DISARM;
-                    state_start_tick = now;
-                    Vibration_Reset();
-                    printf("\r\n[FSM] User Manual Disarm -> DISARM\r\n");
-                    SD_Log_Event("TEMP_DISARM -> DISARM (Manual)");
-                }
-                else
-                {
-                    FSM_SetError("WRONG PIN!", 1500);
-                }
-                pin_idx = 0; pin_buffer[0] = '\0';
+                FSM_TransitionTo(STATE_DISARM, now,
+                                 "TEMP_DISARM -> DISARM (valid PIN)");
             }
-            else if (now - state_start_tick >= TEMP_DISARM_MS)
+            else if (vib_level == VIB_HEAVY)
             {
-                if (!door_open)
-                {
-                    /* Tự động kích hoạt lại (Auto-Rearm) */
-                    currentState = STATE_ARMED;
-                    state_start_tick = now;
-                    Vibration_Reset();
-                    printf("\r\n[FSM] 60s Elapsed & Door Closed -> AUTO-REARMED\r\n");
-                    SD_Log_Event("TEMP_DISARM -> ARMED (Auto-Rearm)");
-                }
-                else
-                {
-                    /* Hết 60s mà quên đóng cửa -> Báo động */
-                    currentState = STATE_ALARM_EMERGE;
-                    state_start_tick = now;
-                    Vibration_Reset();
-                    printf("\r\n[FSM] 60s Elapsed but Door OPEN -> ALARM_EMERGE\r\n");
-                    SD_Log_Event("TEMP_DISARM -> ALARM_EMERGE (Door Left Open)");
-                }
-                pin_idx = 0; pin_buffer[0] = '\0';
+                FSM_TransitionTo(STATE_ALARM_EMERGE, now,
+                                 "TEMP_DISARM -> ALARM_EMERGE (heavy vibration)");
+            }
+            else if (Time_HasElapsed(now, state_start_tick, TEMP_DISARM_MS))
+            {
+                FSM_TransitionTo(door_open ? STATE_ALARM_EMERGE : STATE_ARMED, now,
+                                 door_open
+                                     ? "TEMP_DISARM -> ALARM_EMERGE (door left open)"
+                                     : "TEMP_DISARM -> ARMED (auto-rearm)");
             }
             break;
 
-        /* --- 6. STATE_ALARM_EMERGE --- */
         case STATE_ALARM_EMERGE:
-            if (pin_submitted)
+            if (is_pin_correct)
             {
-                if (is_pin_correct)
-                {
-                    currentState = STATE_TEMP_ALARM;
-                    state_start_tick = now;
-                    Vibration_Reset();
-                    printf("\r\n[FSM] Alarm Verified with PIN -> TEMP_ALARM (30s Inspection)\r\n");
-                    SD_Log_Event("ALARM_EMERGE -> TEMP_ALARM (30s Inspection)");
-                }
-                else
-                {
-                    FSM_SetError("WRONG PIN!", 1500);
-                }
-                pin_idx = 0; pin_buffer[0] = '\0';
+                FSM_TransitionTo(STATE_TEMP_ALARM, now,
+                                 "ALARM_EMERGE -> TEMP_ALARM (valid PIN)");
             }
             break;
 
-        /* --- 7. STATE_TEMP_ALARM (30s) --- */
         case STATE_TEMP_ALARM:
-            if (pin_submitted)
+            if (vib_level == VIB_HEAVY)
             {
-                if (is_pin_correct)
-                {
-                    currentState = STATE_DISARM;
-                    state_start_tick = now;
-                    Vibration_Reset();
-                    printf("\r\n[FSM] Inspection finished -> DISARM\r\n");
-                    SD_Log_Event("TEMP_ALARM -> DISARM (By PIN)");
-                }
-                else
-                {
-                    FSM_SetError("WRONG PIN!", 1500);
-                }
-                pin_idx = 0; pin_buffer[0] = '\0';
+                FSM_TransitionTo(STATE_ALARM_EMERGE, now,
+                                 "TEMP_ALARM -> ALARM_EMERGE (heavy vibration)");
             }
-            else if (now - state_start_tick >= TEMP_ALARM_MS)
+            else if (Time_HasElapsed(now, state_start_tick, TEMP_ALARM_MS))
             {
-                if (!door_open)
-                {
-                    currentState = STATE_ARMED;
-                    state_start_tick = now;
-                    Vibration_Reset();
-                    printf("\r\n[FSM] 30s Inspection finished & Door Closed -> ARMED\r\n");
-                    SD_Log_Event("TEMP_ALARM -> ARMED (Scene Safe)");
-                }
-                else
-                {
-                    currentState = STATE_ALARM_EMERGE;
-                    state_start_tick = now;
-                    Vibration_Reset();
-                    printf("\r\n[FSM] 30s Inspection finished but Door OPEN -> Resume ALARM_EMERGE\r\n");
-                    SD_Log_Event("TEMP_ALARM -> ALARM_EMERGE (Door Still Open)");
-                }
-                pin_idx = 0; pin_buffer[0] = '\0';
+                FSM_TransitionTo(door_open ? STATE_ALARM_EMERGE : STATE_ARMED, now,
+                                 door_open
+                                     ? "TEMP_ALARM -> ALARM_EMERGE (door still open)"
+                                     : "TEMP_ALARM -> ARMED (scene safe)");
             }
+            break;
+
+        default:
+            FSM_TransitionTo(STATE_DISARM, now,
+                             "Invalid FSM state -> DISARM");
             break;
     }
 
-    /* ------------------------------------------------------------- */
-    /* 3. Cập nhật đầu ra Còi Buzzer, LED và Màn hình OLED           */
-    /* ------------------------------------------------------------- */
+    if (pin_submitted && !is_pin_correct)
+    {
+        FSM_HandleWrongPin(now);
+    }
+
     FSM_Update_Outputs(now);
     FSM_Render_OLED(now, door_open, pir_motion, vib_level);
 }

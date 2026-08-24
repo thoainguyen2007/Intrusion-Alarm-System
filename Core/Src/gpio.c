@@ -82,13 +82,13 @@ void MX_GPIO_Init(void)
 
   /*Configure GPIO pin : PIR_IN_Pin */
   GPIO_InitStruct.Pin = PIR_IN_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_PULLDOWN;
   HAL_GPIO_Init(PIR_IN_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : VIR_IN_Pin (SW-420 Vibration) */
   GPIO_InitStruct.Pin = VIR_IN_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(VIR_IN_GPIO_Port, &GPIO_InitStruct);
 
