@@ -38,6 +38,8 @@ void Buzzer_SetState(bool on)
 /* ==================================================================== */
 static SystemState_t currentState = STATE_DISARM;
 static uint32_t state_start_tick = 0;
+static bool entry_pir_ready_tracking = false;
+static uint32_t entry_pir_ready_tick = 0;
 
 /* Bộ đệm nhập mã PIN từ Keypad */
 static char pin_buffer[PIN_MAX_LEN + 1];
@@ -92,6 +94,7 @@ static void FSM_TransitionTo(SystemState_t next_state, uint32_t now, const char 
     error_banner[0] = '\0';
     FSM_ClearPin();
     Vibration_Reset();
+    entry_pir_ready_tracking = false;
 
     printf("\r\n[FSM] %s\r\n", reason);
     SD_Log_Event(reason);
@@ -142,6 +145,8 @@ void FSM_Init(void)
     failed_pin_attempts = 0;
     pin_locked = false;
     pin_lockout_deadline = 0;
+    entry_pir_ready_tracking = false;
+    entry_pir_ready_tick = 0U;
     error_banner[0] = '\0';
     error_banner_timeout = 0;
 
@@ -419,7 +424,8 @@ static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_motion, VibLe
 /* ==================================================================== */
 /*                   XỬ LÝ CHUYỂN DỊCH TRẠNG THÁI CHÍNH                 */
 /* ==================================================================== */
-void FSM_Process(char key_pressed, bool door_open, bool pir_motion, VibLevel_t vib_level)
+void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
+                 bool pir_motion, VibLevel_t vib_level)
 {
     uint32_t now = HAL_GetTick();
     bool pin_submitted = false;
@@ -536,6 +542,19 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_motion, VibLevel_t v
             break;
 
         case STATE_ENTRY_DELAY:
+            if (!pir_ready || pir_motion)
+            {
+                if (entry_pir_ready_tracking)
+                    printf("[FSM] ENTRY_DELAY: PIR READY timer cancelled.\r\n");
+                entry_pir_ready_tracking = false;
+            }
+            else if (!entry_pir_ready_tracking)
+            {
+                entry_pir_ready_tracking = true;
+                entry_pir_ready_tick = now;
+                printf("[FSM] ENTRY_DELAY: PIR READY timer started (15s).\r\n");
+            }
+
             if (is_pin_correct)
             {
                 FSM_TransitionTo(STATE_TEMP_DISARM, now,
@@ -551,12 +570,19 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_motion, VibLevel_t v
                 FSM_TransitionTo(STATE_ALARM_EMERGE, now,
                                  "ENTRY_DELAY -> ALARM_EMERGE (door opened)");
             }
+            else if (entry_pir_ready_tracking &&
+                     Time_HasElapsed(now, entry_pir_ready_tick,
+                                     ENTRY_PIR_READY_REARM_MS))
+            {
+                FSM_TransitionTo(STATE_ARMED, now,
+                                 "ENTRY_DELAY -> ARMED (PIR READY for 15s)");
+            }
             else if (Time_HasElapsed(now, state_start_tick, ENTRY_DELAY_MS))
             {
                 FSM_TransitionTo(STATE_ALARM_EMERGE, now,
                                  "ENTRY_DELAY -> ALARM_EMERGE (timeout)");
             }
-            /* PIR không làm đổi trạng thái; cửa mở luôn là xâm nhập. */
+            /* PIR ACTIVE hủy bộ đếm READY; cửa mở luôn là xâm nhập. */
             break;
 
         case STATE_TEMP_DISARM:

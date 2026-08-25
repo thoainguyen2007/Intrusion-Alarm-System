@@ -158,6 +158,7 @@ static void PIR_Process(uint32_t now)
       pir_stable_level = GPIO_PIN_RESET;
       pir_candidate_level = raw;
       pir_candidate_tick = now;
+      pir_report_tick = now;
       printf("[SENSOR] PIR: Warm-up Complete (30s). Motion monitoring ACTIVE!\r\n");
     }
   }
@@ -205,13 +206,13 @@ static void PIR_Process(uint32_t now)
     printf("[SENSOR] PIR: Motion Ended (Quiet).\r\n");
   was_pir_triggered = pir_triggered;
 
-  if (Time_HasElapsed(now, pir_report_tick, PIR_REPORT_MS))
+  if (pir_ready && Time_HasElapsed(now, pir_report_tick, PIR_REPORT_MS))
   {
     pir_report_tick = now;
     printf("[PIR] raw=%s filtered=%s phase=%s\r\n",
            (raw == GPIO_PIN_SET) ? "HIGH" : "LOW",
            pir_triggered ? "ON" : "OFF",
-           !pir_ready ? "WARMUP" : (pir_blocking ? "BLOCKING" : (pir_triggered ? "ACTIVE" : "READY")));
+           pir_blocking ? "BLOCKING" : (pir_triggered ? "ACTIVE" : "READY"));
   }
 }
 /* USER CODE END 0 */
@@ -399,7 +400,7 @@ int main(void)
     bool is_pir_active = (pir_ready && pir_triggered == 1);
     VibLevel_t current_vib = Vibration_GetLevel();
 
-    FSM_Process(key, is_door_open, is_pir_active, current_vib);
+    FSM_Process(key, is_door_open, pir_ready == 1U, is_pir_active, current_vib);
     SystemState_t logger_state = FSM_GetState();
     /* Chỉ flush FatFs trong các trạng thái đã xác thực, không chặn lúc canh gác/còi hú. */
     bool logger_io_allowed = (logger_state == STATE_DISARM ||

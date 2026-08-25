@@ -16,7 +16,7 @@
 1. [Tổng Quan Dự Án](#1-tổng-quan-dự-án)
 2. [Sơ Đồ Kết Nối Phần Cứng & Pinout STM32](#2-sơ-đồ-kết-nối-phần-cứng--pinout-stm32)
 3. [Thiết Kế Máy Trạng Thái Hữu Hạn (7-State FSM)](#3-thiết-kế-máy-trạng-thái-hữu-hạn-7-state-fsm)
-4. [Kịch Bản Kiểm Thử Hoạt Động (Test Cases TC01 - TC10)](#4-kịch-bản-kiểm-thử-hoạt-động-test-cases-tc01---tc10)
+4. [Kịch Bản Kiểm Thử Hoạt Động (Test Cases TC01 - TC11)](#4-kịch-bản-kiểm-thử-hoạt-động-test-cases-tc01---tc11)
 5. [Thuật Toán Xử Lý Tín Hiệu & Hiệu Chuẩn Cảm Biến](#5-thuật-toán-xử-lý-tín-hiệu--hiệu-chuẩn-cảm-biến)
 6. [Cấu Trúc Thư Mục Dự Án](#6-cấu-trúc-thư-mục-dự-án)
 7. [Hướng Dẫn Biên Dịch (Build) & Nạp Code (Flash)](#7-hướng-dẫn-biên-dịch-build--nạp-code-flash)
@@ -103,6 +103,7 @@ stateDiagram-v2
     ARMED --> ALARM_EMERGE: cửa mở / rung mạnh
 
     ENTRY_DELAY --> TEMP_DISARM: PIN đúng
+    ENTRY_DELAY --> ARMED: PIR READY liên tục 15s
     ENTRY_DELAY --> ALARM_EMERGE: cửa mở / hết 30s / rung mạnh
 
     TEMP_DISARM --> DISARM: PIN đúng
@@ -120,7 +121,7 @@ stateDiagram-v2
 3. **`ARMED` (Vũ trang / Giám sát toàn diện):** Hệ thống giám sát chặt chẽ:
    * Nếu PIR phát hiện chuyển động hoặc có rung nhẹ $\rightarrow$ Chuyển sang `ENTRY DELAY` để xác thực PIN trước khi báo động.
    * Nếu cửa mở hoặc có rung mạnh ($\ge 20$ xung) $\rightarrow$ Nhảy thẳng sang `ALARM EMERGE`.
-4. **`ENTRY DELAY` (Cảnh báo sớm - 30s):** Trạng thái này được kích bởi PIR hoặc rung nhẹ và cho người dùng 30s để nhập PIN. Nhập đúng mã $\rightarrow$ `TEMP DISARM`; cửa mở, hết 30s hoặc rung mạnh $\rightarrow$ `ALARM EMERGE`. PIR không khởi động lại bộ đếm.
+4. **`ENTRY DELAY` (Cảnh báo sớm - 30s):** Trạng thái này được kích bởi PIR hoặc rung nhẹ và cho người dùng 30s để nhập PIN. Nhập đúng mã $\rightarrow$ `TEMP DISARM`; cửa mở, hết 30s hoặc rung mạnh $\rightarrow$ `ALARM EMERGE`. Nếu PIR đã warm-up và duy trì `READY` liên tục 15s, hệ thống xem đây là cảnh báo giả và tự quay về `ARMED`; bất kỳ lần PIR ACTIVE lại nào cũng hủy và khởi động lại bộ đếm yên tĩnh này.
 5. **`TEMP DISARM` (Giải trừ tạm thời - 60s):** Cấp quyền 60s để bốc dỡ hàng hóa hoặc chuyển đồ vào nhà. Rung mạnh vẫn kích hoạt báo động. Hết 60s: nếu cửa đã đóng $\rightarrow$ tự động `ARMED`; nếu cửa vẫn mở $\rightarrow$ `ALARM EMERGE`.
 6. **`ALARM EMERGE` (Báo động khẩn cấp):** Còi hú liên tục, sự kiện báo động được đưa vào queue RAM và màn hình OLED nhấp nháy cảnh báo. PIN đúng chuyển sang `TEMP ALARM`; còi chưa tắt mà tiếp tục hú đủ thời gian xác minh.
 7. **`TEMP ALARM` (Xác minh báo động - 30s):** Sau khi nhập đúng PIN trong trạng thái báo động, còi vẫn hú liên tục đủ 30s và không nhận PIN thứ hai để thoát sớm. Hết 30s: chỉ cần cửa đóng $\rightarrow$ tự động `ARMED`; nếu cửa vẫn mở $\rightarrow$ quay lại `ALARM EMERGE`.
@@ -129,7 +130,7 @@ Mã PIN có đúng 4 chữ số. Sau 5 lần xác nhận sai, bàn phím bị kh
 
 ---
 
-## 4. KỊCH BẢN KIỂM THỬ HOẠT ĐỘNG (TEST CASES TC01 - TC10)
+## 4. KỊCH BẢN KIỂM THỬ HOẠT ĐỘNG (TEST CASES TC01 - TC11)
 
 | Mã Test | Trạng Thái Bắt Đầu | Sự Kiện Kích Hoạt | Kết Quả Mong Đợi / Chuyển Trạng Thái |
 | :--- | :--- | :--- | :--- |
@@ -143,6 +144,7 @@ Mã PIN có đúng 4 chữ số. Sau 5 lần xác nhận sai, bàn phím bị kh
 | **TC08** | `TEMP DISARM` | Hết 60s và Cửa đã đóng lại | Tự động kích hoạt lại trạng thái **`ARMED`**. |
 | **TC09** | `TEMP DISARM` | Hết 60s nhưng Cửa vẫn để mở | Kích hoạt **`ALARM EMERGE`** báo động quên đóng cửa. |
 | **TC10** | `ALARM EMERGE` | Nhập đúng mã PIN xác minh | Chuyển sang **`TEMP ALARM`**, còi tiếp tục hú đủ 30s. Hết 30s nếu cửa đóng $\rightarrow$ về `ARMED`; nếu cửa mở $\rightarrow$ quay lại `ALARM EMERGE`. |
+| **TC11** | `ENTRY DELAY` | PIR đã warm-up và `READY` liên tục 15s, cửa vẫn đóng, không rung mạnh | Hủy cảnh báo giả và tự trở lại **`ARMED`**. PIR ACTIVE lại trước 15s sẽ reset bộ đếm READY. |
 
 ---
 
@@ -172,7 +174,7 @@ Mã PIN có đúng 4 chữ số. Sau 5 lần xác nhận sai, bàn phím bị kh
 * **Thời gian warm-up 30s:** Trong 30 giây đầu tiên (`PIR_WARMUP_MS = 30000`), tín hiệu PIR chưa được đưa vào FSM.
 * **Lọc mức OUT:** Firmware lấy mẫu cả HIGH và LOW; một mức chỉ được chấp nhận sau khi ổn định 200 ms, thay vì bật bằng cạnh lên rồi tắt theo bộ giữ 1,5 giây riêng.
 * **Bám blocking time:** Khi OUT xuống LOW, trạng thái PIR vẫn giữ ON thêm 2,5 giây. Chỉ khi LOW liên tục hết khoảng này mới công bố OFF; nếu OUT lên HIGH lại thì hủy pha chờ tắt.
-* **UART chẩn đoán 1 Hz:** Mỗi giây in `raw`, `filtered` và `phase` (`WARMUP`, `READY`, `ACTIVE`, `BLOCKING`) để phân biệt xung vật lý của module với tín hiệu đã đưa vào FSM.
+* **UART chẩn đoán 1 Hz:** Không in log PIR định kỳ trong warm-up. Sau khi warm-up hoàn tất, mỗi giây in `raw`, `filtered` và `phase` (`READY`, `ACTIVE`, `BLOCKING`) để phân biệt xung vật lý của module với tín hiệu đã đưa vào FSM.
 * **Cấu hình phần cứng bắt buộc:**
   * Cắm Jumper trên module sang vị trí **`H`** (Repeatable Trigger) để tín hiệu OUT giữ mức HIGH liên tục khi có người di chuyển.
   * Cấp nguồn VCC vào chân **`5V`** (không cắm 3.3V vì sẽ gây sụt áp IC ổn áp 7133).
@@ -302,4 +304,4 @@ Không nạp một file HEX/ELF cũ từ layout `build\` cấp trên. Artifact c
    [PIR] raw=LOW filtered=OFF phase=READY
    ```
 
-Các pha PIR có ý nghĩa: `WARMUP` chưa đưa tín hiệu vào FSM; `READY` đang chờ; `ACTIVE` đã xác nhận chuyển động; `BLOCKING` chân OUT đã LOW nhưng trạng thái lọc vẫn ON trong 2,5 giây. Không mở đồng thời COM bằng hai phần mềm vì một ứng dụng sẽ giữ độc quyền cổng UART.
+Trong warm-up không có dòng trạng thái PIR định kỳ. Sau đó, `READY` là đang chờ; `ACTIVE` là đã xác nhận chuyển động; `BLOCKING` là chân OUT đã LOW nhưng trạng thái lọc vẫn ON trong 2,5 giây. Không mở đồng thời COM bằng hai phần mềm vì một ứng dụng sẽ giữ độc quyền cổng UART.

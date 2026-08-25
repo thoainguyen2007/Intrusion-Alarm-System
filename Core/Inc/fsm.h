@@ -17,6 +17,7 @@
 
 #define EXIT_DELAY_MS           15000       /* Thời gian trễ rời nhà (15 giây) */
 #define ENTRY_DELAY_MS          30000       /* Thời gian trễ vào nhà nhập mã (30 giây) */
+#define ENTRY_PIR_READY_REARM_MS 15000U      /* PIR READY liên tục 15s: hủy cảnh báo giả */
 #define TEMP_DISARM_MS          60000       /* Thời gian giải trừ tạm thời (60 giây) */
 #define TEMP_ALARM_MS           30000       /* Thời gian kiểm tra hiện trường (30 giây) */
 
@@ -37,7 +38,8 @@ typedef enum {
 /*                             HÀM API FSM                              */
 /* ==================================================================== */
 void FSM_Init(void);
-void FSM_Process(char key_pressed, bool door_open, bool pir_motion, VibLevel_t vib_level);
+void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
+                 bool pir_motion, VibLevel_t vib_level);
 SystemState_t FSM_GetState(void);
 const char* FSM_GetStateName(SystemState_t state);
 const char* FSM_GetPinBuffer(void);
