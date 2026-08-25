@@ -68,7 +68,9 @@ int __io_putchar(int ch)
 int fputc(int ch, FILE *f)
 #endif
 {
-  HAL_UART_Transmit(&huart1, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
+  /* TX at 115200 baud normally completes in <1 ms. A finite timeout prevents
+     a UART peripheral fault from freezing sensing and the watchdog feed. */
+  (void)HAL_UART_Transmit(&huart1, (uint8_t *)&ch, 1, 2U);
   return ch;
 }
 
@@ -96,6 +98,47 @@ static uint32_t pir_report_tick = 0;
 /* Trạng thái phím vừa bấm */
 char last_key = '-';
 static uint8_t sd_sector_buffer[SD_SPI_BLOCK_SIZE];
+
+/* IWDG: LSI nominal 40 kHz / 256, reload 3124 ~= 20 seconds. This is long
+   enough for a bounded SD recovery attempt but resets a genuinely stuck loop. */
+static void Watchdog_Init(void)
+{
+  IWDG->KR = 0x5555U;
+  IWDG->PR = 0x06U;
+  IWDG->RLR = 3124U;
+  IWDG->KR = 0xAAAAU;
+  IWDG->KR = 0xCCCCU;
+}
+
+static inline void Watchdog_Refresh(void)
+{
+  IWDG->KR = 0xAAAAU;
+}
+
+static const char *ResetCause_GetAndClear(void)
+{
+  const char *cause;
+
+  /* Several flags may coexist (PINRST is commonly also set on power-up), so
+     choose the most diagnostic cause first. */
+  if (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDGRST))
+    cause = "IWDG_TIMEOUT";
+  else if (__HAL_RCC_GET_FLAG(RCC_FLAG_WWDGRST))
+    cause = "WWDG_TIMEOUT";
+  else if (__HAL_RCC_GET_FLAG(RCC_FLAG_SFTRST))
+    cause = "SOFTWARE_RESET";
+  else if (__HAL_RCC_GET_FLAG(RCC_FLAG_LPWRRST))
+    cause = "LOW_POWER_RESET";
+  else if (__HAL_RCC_GET_FLAG(RCC_FLAG_PORRST))
+    cause = "POWER_ON_RESET";
+  else if (__HAL_RCC_GET_FLAG(RCC_FLAG_PINRST))
+    cause = "RESET_PIN";
+  else
+    cause = "UNKNOWN_RESET";
+
+  __HAL_RCC_CLEAR_RESET_FLAGS();
+  return cause;
+}
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -241,7 +284,7 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-
+  const char *reset_cause = ResetCause_GetAndClear();
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
@@ -262,6 +305,24 @@ int main(void)
   /* Đọc trạng thái ban đầu của Cửa (Reed Switch) khi vừa cấp nguồn */
   reed_triggered = (HAL_GPIO_ReadPin(REED_IN_GPIO_Port, REED_IN_Pin) == GPIO_PIN_SET) ? 1 : 0;
   was_reed_triggered = reed_triggered;
+
+  /* Show the original project splash immediately after reset, before SD card
+     discovery can delay startup. Coordinates are corrected for 7x10 glyphs:
+     the 18-character bottom row is 126 px wide and must start at x=1. */
+  uint8_t oled_ready = SSD1306_Init(&hi2c1);
+  uint32_t oled_splash_tick = HAL_GetTick();
+  if (oled_ready)
+  {
+    SSD1306_Fill(SSD1306_COLOR_BLACK);
+    SSD1306_GotoXY(11U, 8U);
+    SSD1306_Puts("INTRUSION ALARM", &Font_7x10, SSD1306_COLOR_WHITE);
+    SSD1306_GotoXY(22U, 26U);
+    SSD1306_Puts("SYSTEM READY", &Font_7x10, SSD1306_COLOR_WHITE);
+    SSD1306_GotoXY(1U, 44U);
+    SSD1306_Puts("7-STATE FSM ACTIVE", &Font_7x10, SSD1306_COLOR_WHITE);
+    SSD1306_UpdateScreen();
+    oled_splash_tick = HAL_GetTick();
+  }
 
   /* Log khởi động qua UART1 */
   printf("\r\n========================================\r\n");
@@ -328,23 +389,20 @@ int main(void)
   }
 
   SD_Logger_Init(sd_storage_ready);
+  SD_Logger_BeginSession(reset_cause);
 
-  /* Khởi tạo màn hình OLED SH1106 1.3 inch */
-  uint8_t oled_ready = SSD1306_Init(&hi2c1);
+  /* OLED was initialized before SD probing so the reset splash is immediate. */
   printf("[OLED] SH1106 1.3in address 0x78: %s\r\n",
          oled_ready ? "OK" : "NOT FOUND");
-  SSD1306_Fill(SSD1306_COLOR_BLACK);
-  SSD1306_GotoXY(10, 8);
-  SSD1306_Puts("INTRUSION ALARM", &Font_7x10, SSD1306_COLOR_WHITE);
-  SSD1306_GotoXY(16, 26);
-  SSD1306_Puts("SYSTEM READY", &Font_7x10, SSD1306_COLOR_WHITE);
-  SSD1306_GotoXY(12, 44);
-  SSD1306_Puts("7-STATE FSM ACTIVE", &Font_7x10, SSD1306_COLOR_WHITE);
-  SSD1306_UpdateScreen();
-  HAL_Delay(1000);
+  /* Keep the splash visible for at least one second on fast/no-card boots. */
+  uint32_t splash_elapsed = HAL_GetTick() - oled_splash_tick;
+  if (oled_ready && splash_elapsed < 1000U)
+    HAL_Delay(1000U - splash_elapsed);
 
   /* Khởi tạo Máy trạng thái hữu hạn FSM 7 trạng thái */
   FSM_Init();
+  /* Start only after all potentially slow boot diagnostics have completed. */
+  Watchdog_Init();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -402,11 +460,13 @@ int main(void)
 
     FSM_Process(key, is_door_open, pir_ready == 1U, is_pir_active, current_vib);
     SystemState_t logger_state = FSM_GetState();
-    /* Chỉ flush FatFs trong các trạng thái đã xác thực, không chặn lúc canh gác/còi hú. */
+    /* Mỗi lần chỉ ghi tối đa một record, có rate-limit; tuyệt đối không truy
+       cập FatFs khi canh gác, entry delay hoặc trong cả hai trạng thái còi hú. */
     bool logger_io_allowed = (logger_state == STATE_DISARM ||
-                              logger_state == STATE_TEMP_DISARM ||
-                              logger_state == STATE_TEMP_ALARM);
+                              logger_state == STATE_TEMP_DISARM);
     SD_Logger_Process(logger_io_allowed);
+
+    Watchdog_Refresh();
 
     /* USER CODE END WHILE */
 

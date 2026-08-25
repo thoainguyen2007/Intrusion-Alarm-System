@@ -7,8 +7,9 @@
 #include <string.h>
 
 #define SD_LOG_QUEUE_DEPTH 16U
-#define SD_LOG_MESSAGE_SIZE 96U
+#define SD_LOG_MESSAGE_SIZE 128U
 #define SD_RETRY_INTERVAL_MS 5000U
+#define SD_WRITE_INTERVAL_MS 250U
 
 typedef struct {
     uint32_t tick;
@@ -20,17 +21,23 @@ static uint8_t head;
 static uint8_t tail;
 static uint8_t count;
 static uint32_t dropped_count;
+static uint32_t reported_dropped_count;
 static uint32_t last_retry_tick;
+static uint32_t last_write_tick;
 static bool online;
 
 static void mark_offline(FRESULT reason)
 {
+    char message[48];
     online = false;
     SD_SPI_InvalidateCard();
     (void)f_mount(NULL, USERPath, 0);
     last_retry_tick = HAL_GetTick();
     printf("[FATFS] Logger offline (FR=%u), queued=%u\r\n",
            (unsigned int)reason, count);
+    (void)snprintf(message, sizeof(message), "SD_OFFLINE fatfs_result=%u",
+                   (unsigned int)reason);
+    (void)SD_Logger_Enqueue(message);
 }
 
 static FRESULT append_entry(const SD_LogEntry_t *entry, UINT *bytes_written)
@@ -39,7 +46,7 @@ static FRESULT append_entry(const SD_LogEntry_t *entry, UINT *bytes_written)
     FRESULT result = f_open(&file, "0:LOG.TXT", FA_OPEN_ALWAYS | FA_WRITE);
     if (result != FR_OK) return result;
 
-    char line[128];
+    char line[160];
     int length = snprintf(line, sizeof(line), "[%lums] %s\r\n",
                           entry->tick, entry->message);
     if (length <= 0 || length >= (int)sizeof(line)) {
@@ -61,11 +68,21 @@ static FRESULT append_entry(const SD_LogEntry_t *entry, UINT *bytes_written)
 
 void SD_Logger_Init(bool storage_ready)
 {
+    SD_Logger_ResetSession(storage_ready);
+}
+
+void SD_Logger_ResetSession(bool storage_ready)
+{
+    /* No heap is used. Clear every slot as well as all ring-buffer counters so
+       a software/session reset cannot retain stale messages or drop counts. */
+    memset(queue, 0, sizeof(queue));
     head = 0U;
     tail = 0U;
     count = 0U;
     dropped_count = 0U;
+    reported_dropped_count = 0U;
     last_retry_tick = HAL_GetTick();
+    last_write_tick = HAL_GetTick();
     online = storage_ready;
 }
 
@@ -84,6 +101,20 @@ bool SD_Logger_Enqueue(const char *message)
     return true;
 }
 
+void SD_Logger_BeginSession(const char *reset_reason)
+{
+    char message[SD_LOG_MESSAGE_SIZE];
+    const char *reason = (reset_reason != NULL && reset_reason[0] != '\0')
+                       ? reset_reason : "UNKNOWN";
+
+    /* Delimit sessions without erasing LOG.TXT, so earlier security history is
+       preserved even though HAL_GetTick() restarts from zero after every boot. */
+    (void)SD_Logger_Enqueue("========== NEW BOOT SESSION ==========");
+    (void)snprintf(message, sizeof(message), "BOOT reset_cause=%s", reason);
+    (void)SD_Logger_Enqueue(message);
+    (void)SD_Logger_Enqueue("FW version=2.1 fsm=7-state log=event-snapshot");
+}
+
 void SD_Logger_Process(bool allow_io)
 {
     /* Caller only permits blocking FatFs/SPI work in authenticated safe states. */
@@ -100,6 +131,7 @@ void SD_Logger_Process(bool allow_io)
         if (mount_result == FR_OK) {
             online = true;
             printf("[FATFS] Logger storage recovered, queued=%u\r\n", count);
+            (void)SD_Logger_Enqueue("SD_ONLINE storage recovered");
         } else {
             printf("[FATFS] Logger retry failed (SD=%s, FR=%u)\r\n",
                    SD_SPI_ResultString(sd_result), (unsigned int)mount_result);
@@ -108,6 +140,8 @@ void SD_Logger_Process(bool allow_io)
     }
 
     if (count == 0U) return;
+    if (!Time_HasElapsed(now, last_write_tick, SD_WRITE_INTERVAL_MS)) return;
+    last_write_tick = now;
 
     UINT bytes_written;
     FRESULT result = append_entry(&queue[tail], &bytes_written);
@@ -120,6 +154,15 @@ void SD_Logger_Process(bool allow_io)
     --count;
     printf("[FATFS] Append LOG.TXT: OK (%u bytes), queued=%u\r\n",
            bytes_written, count);
+
+    if (dropped_count != reported_dropped_count && count < SD_LOG_QUEUE_DEPTH)
+    {
+        char message[48];
+        (void)snprintf(message, sizeof(message), "LOGGER dropped_total=%lu",
+                       dropped_count);
+        reported_dropped_count = dropped_count;
+        (void)SD_Logger_Enqueue(message);
+    }
 }
 
 bool SD_Logger_IsOnline(void) { return online; }

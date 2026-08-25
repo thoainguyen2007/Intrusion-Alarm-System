@@ -19,17 +19,22 @@ static SSD1306_t SSD1306;
 /**
   * @brief  Send command to OLED controller
   */
-static void SSD1306_WriteCommand(uint8_t command)
+static HAL_StatusTypeDef SSD1306_WriteCommand(uint8_t command)
 {
-    HAL_I2C_Mem_Write(SSD1306_I2C, DevAddress, 0x00, 1, &command, 1, 10);
+    return HAL_I2C_Mem_Write(SSD1306_I2C, DevAddress, 0x00, 1,
+                             &command, 1, 10U);
 }
 
 /**
   * @brief  Send data stream to OLED controller
   */
-static void SSD1306_WriteData(uint8_t *buffer, size_t size)
+static HAL_StatusTypeDef SSD1306_WriteData(uint8_t *buffer, size_t size)
 {
-    HAL_I2C_Mem_Write(SSD1306_I2C, DevAddress, 0x40, 1, buffer, size, 100);
+    /* I2C1 is configured at 100 kHz: one 128-byte page needs roughly 12 ms.
+       Keep enough margin for HAL overhead while remaining bounded if the OLED
+       is disconnected. A 10 ms timeout truncated frames and lost text rows. */
+    return HAL_I2C_Mem_Write(SSD1306_I2C, DevAddress, 0x40, 1,
+                             buffer, size, 30U);
 }
 
 /**
@@ -104,10 +109,12 @@ void SSD1306_UpdateScreen(void)
     if (!SSD1306.Initialized) return;
     uint8_t m;
     for (m = 0; m < 8; m++) {
-        SSD1306_WriteCommand(0xB0 + m); // Set Page Address
-        SSD1306_WriteCommand(0x02);     // Set Lower Column Address (2 pixel offset for SH1106)
-        SSD1306_WriteCommand(0x10);     // Set Higher Column Address
-        SSD1306_WriteData(&SSD1306_Buffer[SSD1306_WIDTH * m], SSD1306_WIDTH);
+        if (SSD1306_WriteCommand(0xB0 + m) != HAL_OK ||
+            SSD1306_WriteCommand(0x02) != HAL_OK ||
+            SSD1306_WriteCommand(0x10) != HAL_OK ||
+            SSD1306_WriteData(&SSD1306_Buffer[SSD1306_WIDTH * m],
+                              SSD1306_WIDTH) != HAL_OK)
+            break;
     }
 }
 

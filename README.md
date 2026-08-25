@@ -39,13 +39,24 @@ Hệ thống Báo động Xâm nhập là một giải pháp an ninh nhúng th�
 
 Nhật ký SD dùng hàng đợi RAM 16 sự kiện: FSM chỉ enqueue, không gọi FatFs/SPI khi
 đang `EXIT_DELAY`, `ARMED`, `ENTRY_DELAY` hoặc còi hú `ALARM_EMERGE`.
-`sd_logger.c` chỉ ghi và `f_sync` trong các cửa sổ đã xác thực `DISARM`,
-`TEMP_DISARM` và `TEMP_ALARM`, nên độ trễ thẻ không chặn vòng điều khiển khi đang
-canh gác hoặc còi hú. `TEMP_ALARM` cho phép xả sự kiện báo động xuống thẻ ngay
-sau khi người dùng xác nhận PIN, trước khi hệ thống tự động ARM lại. Khi I/O lỗi,
+`sd_logger.c` chỉ ghi và `f_sync` trong các cửa sổ an toàn `DISARM` và
+`TEMP_DISARM`, tối đa một bản ghi mỗi 250 ms. Vì vậy không truy cập thẻ khi đang
+canh gác, xác minh xâm nhập hoặc trong cả hai trạng thái còi hú. Khi I/O lỗi,
 sự kiện chưa ghi được giữ lại, thẻ được đánh dấu offline và chỉ thử khởi tạo/mount
 lại mỗi 5 giây trong trạng thái an toàn; nếu queue đầy, bộ đếm `dropped_count` và
-UART cho biết số sự kiện bị bỏ.
+UART cho biết số sự kiện bị bỏ. Mỗi lần firmware khởi động, toàn bộ queue RAM,
+chỉ số `head/tail/count` và `dropped_count` đều được xóa; logger không cấp phát heap.
+File `LOG.TXT` không bị xóa: phiên mới được phân cách bằng `NEW BOOT SESSION` và
+ghi nguyên nhân reset (`POWER_ON_RESET`, `RESET_PIN`, `SOFTWARE_RESET`,
+`IWDG_TIMEOUT`...). Vì vậy timestamp quay lại từ 0 ms không bị nhầm với phiên trước.
+Mọi chuyển trạng thái ghi kèm một snapshot nhất quán: `D` (cửa), `P` (PIR), `V`
+(mức rung) và `E` (nguồn kích hoạt entry: PIR/rung). Log định kỳ/raw vẫn chỉ đi
+UART để tránh làm đầy file và tăng số lần ghi thẻ. Logger cũng ghi sự kiện thẻ
+offline/online và tổng số record đã phải bỏ khi queue từng bị đầy.
+
+Independent watchdog dùng LSI với timeout danh định khoảng 20 giây và được feed
+ở cuối vòng lặp. UART có timeout truyền hữu hạn, OLED được giới hạn 2 FPS để giảm
+blocking; watchdog sẽ reset MCU nếu một ngoại vi vẫn làm vòng điều khiển treo lâu.
 
 ---
 
@@ -67,7 +78,7 @@ Toàn bộ sơ đồ chân được cấu hình chuẩn trên STM32F103C8T6:
 | **UART Debug (RX)**| USB-UART | **`PA10`** | `USART1_RX` (115200 8N1) | Đã cấu hình nhưng firmware hiện chưa xử lý lệnh UART |
 | **Bàn Phím (Hàng)** | Keypad 4x4 (Row 1..4) | **`PB0, PB1, PB10, PB11`** | `GPIO_Output_PP`, mặc định HIGH | Lần lượt kéo từng hàng xuống LOW để quét phím |
 | **Bàn Phím (Cột)** | Keypad 4x4 (Col 1..4) | **`PB12, PB13, PB14, PB15`** | `GPIO_Input` (Pull-up) | Đọc trạng thái cột để giải mã phím bấm |
-| **Màn Hình OLED** | OLED 1.3" SH1106, `0x3C`/HAL `0x78` | **`PB6`** (SCL), **`PB7`** (SDA) | `I2C1_SCL`, `I2C1_SDA` (Fast Mode 400kHz) | Hiển thị giao diện UI đa màn hình |
+| **Màn Hình OLED** | OLED 1.3" SH1106, `0x3C`/HAL `0x78` | **`PB6`** (SCL), **`PB7`** (SDA) | `I2C1_SCL`, `I2C1_SDA` (100kHz) | Hiển thị giao diện UI đa màn hình |
 | **LED Trạng Thái** | Onboard LED | **`PC13`** | `GPIO_Output_PP` (Active-Low) | Đèn báo nhịp tim hệ thống |
 
 Module MicroSD 6 chân dùng trong dự án được nối theo thứ tự chức năng:
@@ -103,16 +114,16 @@ stateDiagram-v2
     ARMED --> ALARM_EMERGE: cửa mở / rung mạnh
 
     ENTRY_DELAY --> TEMP_DISARM: PIN đúng
-    ENTRY_DELAY --> ARMED: PIR READY liên tục 15s
+    ENTRY_DELAY --> ARMED: chỉ entry do PIR và PIR READY liên tục 15s
     ENTRY_DELAY --> ALARM_EMERGE: cửa mở / hết 30s / rung mạnh
 
     TEMP_DISARM --> DISARM: PIN đúng
     TEMP_DISARM --> ARMED: hết 60s và cửa đóng
     TEMP_DISARM --> ALARM_EMERGE: rung mạnh / hết 60s và cửa mở
 
-    ALARM_EMERGE --> TEMP_ALARM: PIN đúng
+    ALARM_EMERGE --> TEMP_ALARM: cửa đóng và PIN đúng
     TEMP_ALARM --> ARMED: hết 30s và cửa đóng
-    TEMP_ALARM --> ALARM_EMERGE: rung mạnh / hết 30s và cửa mở
+    TEMP_ALARM --> ALARM_EMERGE: cửa mở lại / rung mạnh
 ```
 
 ### Chi tiết các trạng thái:
@@ -121,12 +132,12 @@ stateDiagram-v2
 3. **`ARMED` (Vũ trang / Giám sát toàn diện):** Hệ thống giám sát chặt chẽ:
    * Nếu PIR phát hiện chuyển động hoặc có rung nhẹ $\rightarrow$ Chuyển sang `ENTRY DELAY` để xác thực PIN trước khi báo động.
    * Nếu cửa mở hoặc có rung mạnh ($\ge 20$ xung) $\rightarrow$ Nhảy thẳng sang `ALARM EMERGE`.
-4. **`ENTRY DELAY` (Cảnh báo sớm - 30s):** Trạng thái này được kích bởi PIR hoặc rung nhẹ và cho người dùng 30s để nhập PIN. Nhập đúng mã $\rightarrow$ `TEMP DISARM`; cửa mở, hết 30s hoặc rung mạnh $\rightarrow$ `ALARM EMERGE`. Nếu PIR đã warm-up và duy trì `READY` liên tục 15s, hệ thống xem đây là cảnh báo giả và tự quay về `ARMED`; bất kỳ lần PIR ACTIVE lại nào cũng hủy và khởi động lại bộ đếm yên tĩnh này.
+4. **`ENTRY DELAY` (Cảnh báo sớm - tối đa 30s):** PIR và rung nhẹ là hai nguồn kích hoạt độc lập. Cửa mở/rung mạnh luôn được xét trước PIN và chuyển ngay sang `ALARM EMERGE`. Nếu an toàn, PIN đúng $\rightarrow$ `TEMP DISARM`. Mốc 30s là timeout tối đa, không phải thời gian bắt buộc phải chờ: riêng entry do PIR có thể tự về `ARMED` sớm khi PIR đã warm-up và duy trì `READY` liên tục 15s. Entry do rung nhẹ không dùng trạng thái PIR để tự hủy và sẽ chờ PIN hoặc timeout 30s.
 5. **`TEMP DISARM` (Giải trừ tạm thời - 60s):** Cấp quyền 60s để bốc dỡ hàng hóa hoặc chuyển đồ vào nhà. Rung mạnh vẫn kích hoạt báo động. Hết 60s: nếu cửa đã đóng $\rightarrow$ tự động `ARMED`; nếu cửa vẫn mở $\rightarrow$ `ALARM EMERGE`.
-6. **`ALARM EMERGE` (Báo động khẩn cấp):** Còi hú liên tục, sự kiện báo động được đưa vào queue RAM và màn hình OLED nhấp nháy cảnh báo. PIN đúng chuyển sang `TEMP ALARM`; còi chưa tắt mà tiếp tục hú đủ thời gian xác minh.
-7. **`TEMP ALARM` (Xác minh báo động - 30s):** Sau khi nhập đúng PIN trong trạng thái báo động, còi vẫn hú liên tục đủ 30s và không nhận PIN thứ hai để thoát sớm. Hết 30s: chỉ cần cửa đóng $\rightarrow$ tự động `ARMED`; nếu cửa vẫn mở $\rightarrow$ quay lại `ALARM EMERGE`.
+6. **`ALARM EMERGE` (Báo động khẩn cấp):** Còi hú liên tục. Chỉ khi cửa đã đóng và PIN đúng hệ thống mới cho qua lớp an ninh để vào `TEMP ALARM`; PIN đúng khi cửa còn mở bị từ chối.
+7. **`TEMP ALARM` (Xác minh báo động - 30s):** Còi vẫn hú liên tục đủ 30s và không nhận PIN thứ hai để thoát sớm. Nếu cửa mở lại ở bất kỳ thời điểm nào trong 30s, hệ thống lập tức quay về `ALARM EMERGE`; chỉ một khoảng đủ 30s với cửa luôn đóng mới về `ARMED`.
 
-Mã PIN có đúng 4 chữ số. Sau 5 lần xác nhận sai, bàn phím bị khóa 30 giây; trong thời gian khóa, cảm biến và các bộ đếm thời gian vẫn tiếp tục hoạt động bình thường. Trong mỗi trạng thái, PIN đúng được xử lý trước các sự kiện cảm biến cùng chu kỳ; riêng `TEMP_ALARM` không nhận thêm PIN và chỉ thoát theo rung mạnh hoặc timeout 30 giây.
+Mã PIN có đúng 4 chữ số. Sau 5 lần xác nhận sai, bàn phím bị khóa 30 giây; trong thời gian khóa, cảm biến và các bộ đếm thời gian vẫn tiếp tục hoạt động bình thường. Trong các trạng thái giám sát, cửa và rung mạnh được xử lý trước PIN trong cùng chu kỳ. `TEMP_ALARM` không nhận thêm PIN và chỉ về `ARMED` sau 30 giây an toàn liên tục.
 
 ---
 
@@ -140,11 +151,11 @@ Mã PIN có đúng 4 chữ số. Sau 5 lần xác nhận sai, bàn phím bị kh
 | **TC04** | `ARMED` | PIR hoặc rung nhẹ | Chuyển sang **`ENTRY_DELAY`** 30s. Cửa mở hoặc rung mạnh chuyển ngay sang `ALARM_EMERGE`. |
 | **TC05** | `ENTRY DELAY` | Nhập đúng mã PIN trước 30s | Chuyển sang **`TEMP DISARM`** (60s). |
 | **TC06** | `ENTRY DELAY` | Hết 30s mà chưa nhập đúng PIN | Kích hoạt tức thì **`ALARM EMERGE`**; còi hú và sự kiện được enqueue để ghi SD ở cửa sổ I/O an toàn tiếp theo. |
-| **TC07** | `ENTRY DELAY` | Cửa mở, rung mạnh hoặc hết thời gian nhập PIN | Chuyển thẳng sang **`ALARM EMERGE`**. PIR không làm ngắt sớm khoảng trễ. |
+| **TC07** | `ENTRY DELAY` | Cửa mở, rung mạnh hoặc chạm timeout tối đa 30s | Chuyển thẳng sang **`ALARM EMERGE`**. Chỉ entry do PIR được phép tự hủy sớm sau 15s `READY`; entry do rung không tự hủy. |
 | **TC08** | `TEMP DISARM` | Hết 60s và Cửa đã đóng lại | Tự động kích hoạt lại trạng thái **`ARMED`**. |
 | **TC09** | `TEMP DISARM` | Hết 60s nhưng Cửa vẫn để mở | Kích hoạt **`ALARM EMERGE`** báo động quên đóng cửa. |
-| **TC10** | `ALARM EMERGE` | Nhập đúng mã PIN xác minh | Chuyển sang **`TEMP ALARM`**, còi tiếp tục hú đủ 30s. Hết 30s nếu cửa đóng $\rightarrow$ về `ARMED`; nếu cửa mở $\rightarrow$ quay lại `ALARM EMERGE`. |
-| **TC11** | `ENTRY DELAY` | PIR đã warm-up và `READY` liên tục 15s, cửa vẫn đóng, không rung mạnh | Hủy cảnh báo giả và tự trở lại **`ARMED`**. PIR ACTIVE lại trước 15s sẽ reset bộ đếm READY. |
+| **TC10** | `ALARM EMERGE` | Đóng cửa rồi nhập đúng PIN xác minh | Chuyển sang **`TEMP ALARM`**, còi tiếp tục hú đủ 30s. Mở cửa lại trong khoảng này lập tức quay về `ALARM_EMERGE`; cửa đóng liên tục đủ 30s thì về `ARMED`. |
+| **TC11** | `ENTRY DELAY` do PIR | PIR đã warm-up và `READY` liên tục 15s, cửa vẫn đóng, không rung mạnh | Hủy cảnh báo giả và tự trở lại **`ARMED`**. PIR ACTIVE lại trước 15s sẽ reset bộ đếm READY. Entry do rung nhẹ không áp dụng quy tắc này. |
 
 ---
 

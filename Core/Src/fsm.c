@@ -40,6 +40,16 @@ static SystemState_t currentState = STATE_DISARM;
 static uint32_t state_start_tick = 0;
 static bool entry_pir_ready_tracking = false;
 static uint32_t entry_pir_ready_tick = 0;
+typedef enum {
+    ENTRY_TRIGGER_NONE = 0,
+    ENTRY_TRIGGER_PIR,
+    ENTRY_TRIGGER_VIBRATION
+} EntryTrigger_t;
+static EntryTrigger_t entry_trigger = ENTRY_TRIGGER_NONE;
+static bool log_door_open = false;
+static bool log_pir_ready = false;
+static bool log_pir_motion = false;
+static VibLevel_t log_vib_level = VIB_NONE;
 
 /* Bộ đệm nhập mã PIN từ Keypad */
 static char pin_buffer[PIN_MAX_LEN + 1];
@@ -61,8 +71,19 @@ static uint32_t last_led_tick = 0;
 /* ==================================================================== */
 static void SD_Log_Event(const char *event_msg)
 {
+    char record[128];
+    const char *pir = !log_pir_ready ? "WARMUP" :
+                      (log_pir_motion ? "ACTIVE" : "READY");
+    const char *vib = (log_vib_level == VIB_HEAVY) ? "HEAVY" :
+                      (log_vib_level == VIB_LIGHT ? "LIGHT" : "NONE");
+    const char *entry = (entry_trigger == ENTRY_TRIGGER_PIR) ? "PIR" :
+                        (entry_trigger == ENTRY_TRIGGER_VIBRATION ? "VIB" : "NONE");
+
     printf("[LOG] %s\r\n", event_msg);
-    if (!SD_Logger_Enqueue(event_msg))
+    (void)snprintf(record, sizeof(record), "%s | D=%s P=%s V=%s E=%s",
+                   event_msg, log_door_open ? "OPEN" : "CLOSED",
+                   pir, vib, entry);
+    if (!SD_Logger_Enqueue(record))
         printf("[FATFS] Log queue full/invalid, dropped=%lu\r\n",
                SD_Logger_GetDroppedCount());
 }
@@ -87,6 +108,9 @@ static void FSM_TransitionTo(SystemState_t next_state, uint32_t now, const char 
 {
     if (next_state == currentState) return;
 
+    /* Log before clearing entry_trigger so the record retains the source that
+       led into, or is currently leaving, ENTRY_DELAY. */
+    SD_Log_Event(reason);
     currentState = next_state;
     state_start_tick = now;
     last_buz_tick = now;
@@ -95,9 +119,9 @@ static void FSM_TransitionTo(SystemState_t next_state, uint32_t now, const char 
     FSM_ClearPin();
     Vibration_Reset();
     entry_pir_ready_tracking = false;
+    if (next_state != STATE_ENTRY_DELAY) entry_trigger = ENTRY_TRIGGER_NONE;
 
     printf("\r\n[FSM] %s\r\n", reason);
-    SD_Log_Event(reason);
 }
 
 static void FSM_HandleWrongPin(uint32_t now)
@@ -147,6 +171,7 @@ void FSM_Init(void)
     pin_lockout_deadline = 0;
     entry_pir_ready_tracking = false;
     entry_pir_ready_tick = 0U;
+    entry_trigger = ENTRY_TRIGGER_NONE;
     error_banner[0] = '\0';
     error_banner_timeout = 0;
 
@@ -367,7 +392,7 @@ static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_ready,
                             bool pir_motion, VibLevel_t vib_level)
 {
     static uint32_t last_render_tick = 0;
-    if (!Time_HasElapsed(now, last_render_tick, 200U)) return; /* 5 FPS, giảm tải I2C */
+    if (!Time_HasElapsed(now, last_render_tick, 500U)) return; /* 2 FPS: giảm I2C blocking */
     last_render_tick = now;
 
     SSD1306_Fill(SSD1306_COLOR_BLACK);
@@ -425,7 +450,7 @@ static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_ready,
             OLED_PutsCentered(15U, "VERIFY EVENT");
             snprintf(buf, sizeof(buf), "PIN [%s] %2lus", pin_display, remain);
             OLED_PutsCentered(28U, buf);
-            if (entry_pir_ready_tracking)
+            if (entry_trigger == ENTRY_TRIGGER_PIR && entry_pir_ready_tracking)
             {
                 uint32_t quiet = OLED_RemainingFrom(now, entry_pir_ready_tick,
                                                     ENTRY_PIR_READY_REARM_MS);
@@ -433,7 +458,10 @@ static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_ready,
             }
             else
             {
-                snprintf(buf, sizeof(buf), "PIR:%s", !pir_ready ? "WARMUP" : "ACTIVE");
+                snprintf(buf, sizeof(buf), "%s:%s",
+                         entry_trigger == ENTRY_TRIGGER_PIR ? "PIR" : "VIB",
+                         entry_trigger == ENTRY_TRIGGER_PIR
+                             ? (!pir_ready ? "WARMUP" : "ACTIVE") : "VERIFY");
             }
             OLED_PutsCentered(41U, buf);
             OLED_DrawProgress(55U, now, state_start_tick, ENTRY_DELAY_MS);
@@ -485,6 +513,13 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
     bool pin_submitted = false;
     bool is_pin_correct = false;
 
+    /* One coherent sensor snapshot is attached to every event produced during
+       this FSM cycle. Periodic raw sensor samples remain UART-only. */
+    log_door_open = door_open;
+    log_pir_ready = pir_ready;
+    log_pir_motion = pir_motion;
+    log_vib_level = vib_level;
+
     /* Lockout chỉ chặn bàn phím; cảm biến và timeout vẫn luôn hoạt động. */
     if (pin_locked && Time_DeadlineReached(now, pin_lockout_deadline))
     {
@@ -521,8 +556,8 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
 
     /*
      * Thứ tự ưu tiên:
-     * 1) PIN đúng để chủ nhà luôn dừng được hệ thống.
-     * 2) Rung mạnh, cảm biến và timeout.
+     * 1) Cảm biến an ninh và timeout.
+     * 2) PIN chỉ được xét sau khi chu kỳ hiện tại vượt qua lớp an ninh.
      * 3) Ghi nhận PIN sai sau cùng để không che mất sự kiện an ninh.
      */
     switch (currentState)
@@ -567,12 +602,7 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
             break;
 
         case STATE_ARMED:
-            if (is_pin_correct)
-            {
-                FSM_TransitionTo(STATE_DISARM, now,
-                                 "ARMED -> DISARM (valid PIN)");
-            }
-            else if (vib_level == VIB_HEAVY)
+            if (vib_level == VIB_HEAVY)
             {
                 FSM_TransitionTo(STATE_ALARM_EMERGE, now,
                                  "ARMED -> ALARM_EMERGE (heavy vibration)");
@@ -585,18 +615,29 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
             }
             else if (pir_motion)
             {
+                entry_trigger = ENTRY_TRIGGER_PIR;
                 FSM_TransitionTo(STATE_ENTRY_DELAY, now,
                                  "ARMED -> ENTRY_DELAY (PIR motion)");
             }
             else if (vib_level == VIB_LIGHT)
             {
+                entry_trigger = ENTRY_TRIGGER_VIBRATION;
                 FSM_TransitionTo(STATE_ENTRY_DELAY, now,
                                  "ARMED -> ENTRY_DELAY (light vibration)");
+            }
+            else if (is_pin_correct)
+            {
+                FSM_TransitionTo(STATE_DISARM, now,
+                                 "ARMED -> DISARM (valid PIN)");
             }
             break;
 
         case STATE_ENTRY_DELAY:
-            if (!pir_ready || pir_motion)
+            if (entry_trigger != ENTRY_TRIGGER_PIR)
+            {
+                entry_pir_ready_tracking = false;
+            }
+            else if (!pir_ready || pir_motion)
             {
                 if (entry_pir_ready_tracking)
                     printf("[FSM] ENTRY_DELAY: PIR READY timer cancelled.\r\n");
@@ -609,12 +650,7 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
                 printf("[FSM] ENTRY_DELAY: PIR READY timer started (15s).\r\n");
             }
 
-            if (is_pin_correct)
-            {
-                FSM_TransitionTo(STATE_TEMP_DISARM, now,
-                                 "ENTRY_DELAY -> TEMP_DISARM (valid PIN)");
-            }
-            else if (vib_level == VIB_HEAVY)
+            if (vib_level == VIB_HEAVY)
             {
                 FSM_TransitionTo(STATE_ALARM_EMERGE, now,
                                  "ENTRY_DELAY -> ALARM_EMERGE (heavy vibration)");
@@ -624,7 +660,8 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
                 FSM_TransitionTo(STATE_ALARM_EMERGE, now,
                                  "ENTRY_DELAY -> ALARM_EMERGE (door opened)");
             }
-            else if (entry_pir_ready_tracking &&
+            else if (entry_trigger == ENTRY_TRIGGER_PIR &&
+                     entry_pir_ready_tracking &&
                      Time_HasElapsed(now, entry_pir_ready_tick,
                                      ENTRY_PIR_READY_REARM_MS))
             {
@@ -636,16 +673,16 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
                 FSM_TransitionTo(STATE_ALARM_EMERGE, now,
                                  "ENTRY_DELAY -> ALARM_EMERGE (timeout)");
             }
+            else if (is_pin_correct)
+            {
+                FSM_TransitionTo(STATE_TEMP_DISARM, now,
+                                 "ENTRY_DELAY -> TEMP_DISARM (valid PIN)");
+            }
             /* PIR ACTIVE hủy bộ đếm READY; cửa mở luôn là xâm nhập. */
             break;
 
         case STATE_TEMP_DISARM:
-            if (is_pin_correct)
-            {
-                FSM_TransitionTo(STATE_DISARM, now,
-                                 "TEMP_DISARM -> DISARM (valid PIN)");
-            }
-            else if (vib_level == VIB_HEAVY)
+            if (vib_level == VIB_HEAVY)
             {
                 FSM_TransitionTo(STATE_ALARM_EMERGE, now,
                                  "TEMP_DISARM -> ALARM_EMERGE (heavy vibration)");
@@ -657,28 +694,42 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
                                      ? "TEMP_DISARM -> ALARM_EMERGE (door left open)"
                                      : "TEMP_DISARM -> ARMED (auto-rearm)");
             }
+            else if (is_pin_correct)
+            {
+                FSM_TransitionTo(STATE_DISARM, now,
+                                 "TEMP_DISARM -> DISARM (valid PIN)");
+            }
             break;
 
         case STATE_ALARM_EMERGE:
-            if (is_pin_correct)
+            if (is_pin_correct && !door_open)
             {
                 FSM_TransitionTo(STATE_TEMP_ALARM, now,
-                                 "ALARM_EMERGE -> TEMP_ALARM (valid PIN)");
+                                 "ALARM_EMERGE -> TEMP_ALARM (door closed, valid PIN)");
+            }
+            else if (is_pin_correct)
+            {
+                FSM_ClearPin();
+                FSM_SetError("CLOSE DOOR FIRST", 2000U);
+                SD_Log_Event("ALARM_EMERGE unlock rejected: door open");
             }
             break;
 
         case STATE_TEMP_ALARM:
-            if (vib_level == VIB_HEAVY)
+            if (door_open)
+            {
+                FSM_TransitionTo(STATE_ALARM_EMERGE, now,
+                                 "TEMP_ALARM -> ALARM_EMERGE (door reopened)");
+            }
+            else if (vib_level == VIB_HEAVY)
             {
                 FSM_TransitionTo(STATE_ALARM_EMERGE, now,
                                  "TEMP_ALARM -> ALARM_EMERGE (heavy vibration)");
             }
             else if (Time_HasElapsed(now, state_start_tick, TEMP_ALARM_MS))
             {
-                FSM_TransitionTo(door_open ? STATE_ALARM_EMERGE : STATE_ARMED, now,
-                                 door_open
-                                     ? "TEMP_ALARM -> ALARM_EMERGE (door still open)"
-                                     : "TEMP_ALARM -> ARMED (scene safe)");
+                FSM_TransitionTo(STATE_ARMED, now,
+                                 "TEMP_ALARM -> ARMED (30s safe, door closed)");
             }
             break;
 
