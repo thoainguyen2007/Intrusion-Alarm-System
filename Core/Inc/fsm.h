@@ -47,5 +47,6 @@ const char* FSM_GetPinBuffer(void);
 /* API điều khiển còi PWM phần cứng */
 void Buzzer_Init(void);
 void Buzzer_SetState(bool on);
+void Buzzer_RequestKeyBeep(void);
 
 #endif /* __FSM_H */

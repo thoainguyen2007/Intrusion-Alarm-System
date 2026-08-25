@@ -62,9 +62,14 @@ static uint32_t pin_lockout_deadline = 0;
 static char error_banner[32] = "";
 static uint32_t error_banner_timeout = 0;
 
-/* Biến điều khiển nhịp còi Buzzer và nháy LED */
-static uint32_t last_buz_tick = 0;
-static uint32_t last_led_tick = 0;
+/* Key feedback is an overlay owned by the FSM, never a blocking direct write. */
+static bool key_beep_active = false;
+static uint32_t key_beep_deadline = 0U;
+static bool temp_alarm_output_on = true;
+static uint32_t temp_alarm_toggle_tick = 0U;
+
+#define TEMP_ALARM_HALF_PERIOD_START_MS 125U
+#define TEMP_ALARM_HALF_PERIOD_END_MS   750U
 
 /* ==================================================================== */
 /*                  HÀM GHI NHẬT KÝ THẺ NHỚ SD (FATFS)                  */
@@ -113,8 +118,11 @@ static void FSM_TransitionTo(SystemState_t next_state, uint32_t now, const char 
     SD_Log_Event(reason);
     currentState = next_state;
     state_start_tick = now;
-    last_buz_tick = now;
-    last_led_tick = now;
+    if (next_state == STATE_TEMP_ALARM)
+    {
+        temp_alarm_output_on = true;
+        temp_alarm_toggle_tick = now;
+    }
     error_banner[0] = '\0';
     FSM_ClearPin();
     Vibration_Reset();
@@ -174,6 +182,10 @@ void FSM_Init(void)
     entry_trigger = ENTRY_TRIGGER_NONE;
     error_banner[0] = '\0';
     error_banner_timeout = 0;
+    key_beep_active = false;
+    key_beep_deadline = 0U;
+    temp_alarm_output_on = true;
+    temp_alarm_toggle_tick = state_start_tick;
 
     Buzzer_Init();
     Buzzer_SetState(false);
@@ -211,100 +223,98 @@ const char* FSM_GetPinBuffer(void)
     return pin_buffer;
 }
 
+void Buzzer_RequestKeyBeep(void)
+{
+    /* ENTRY_DELAY already has a fast warning pattern. Alarm states own the
+       siren continuously and must never be interrupted by keypad feedback. */
+    if (currentState == STATE_ENTRY_DELAY ||
+        currentState == STATE_ALARM_EMERGE ||
+        currentState == STATE_TEMP_ALARM)
+        return;
+
+    key_beep_active = true;
+    key_beep_deadline = HAL_GetTick() + 40U;
+}
+
 /* ==================================================================== */
 /*            ĐIỀU KHIỂN CÒI BUZZER & LED THEO TỪNG TRẠNG THÁI          */
 /* ==================================================================== */
 static void FSM_Update_Outputs(uint32_t now)
 {
+    uint32_t phase = now - state_start_tick;
+    bool buzzer_requested = false;
+    bool led_on = false;
+
     switch (currentState)
     {
         case STATE_DISARM:
-            /* Còi tắt. LED nháy nhịp tim chậm 0.5Hz (1000ms chu kỳ) */
-            Buzzer_SetState(false);
-            if (Time_HasElapsed(now, last_led_tick, 1000U))
-            {
-                last_led_tick = now;
-                HAL_GPIO_TogglePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin);
-            }
+            /* 0.5 Hz: 1s ON / 1s OFF. */
+            led_on = ((phase % 2000U) < 1000U);
             break;
 
         case STATE_EXIT_DELAY:
-            /* Còi bíp chậm 1Hz (100ms ON / 900ms OFF). LED nhấp nháy 1Hz */
-            if (Time_HasElapsed(now, last_buz_tick, 1000U))
-            {
-                last_buz_tick = now;
-                Buzzer_SetState(true);
-            }
-            else if (Time_HasElapsed(now, last_buz_tick, 100U))
-            {
-                Buzzer_SetState(false);
-            }
-            if (Time_HasElapsed(now, last_led_tick, 500U))
-            {
-                last_led_tick = now;
-                HAL_GPIO_TogglePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin);
-            }
+            /* 1 Hz: buzzer 100ms ON; LED 500ms ON / 500ms OFF. */
+            buzzer_requested = ((phase % 1000U) < 100U);
+            led_on = ((phase % 1000U) < 500U);
             break;
 
         case STATE_ARMED:
-            /* Còi tắt. LED nháy chớp ngắn tuần tra (50ms ON mỗi 1500ms) */
-            Buzzer_SetState(false);
-            if (Time_HasElapsed(now, last_led_tick, 1500U))
-            {
-                last_led_tick = now;
-                HAL_GPIO_WritePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin, GPIO_PIN_RESET); /* BẬT LED */
-            }
-            else if (Time_HasElapsed(now, last_led_tick, 50U))
-            {
-                HAL_GPIO_WritePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin, GPIO_PIN_SET);   /* TẮT LED */
-            }
+            /* Patrol pulse: 50ms ON every 1.5s. */
+            led_on = ((phase % 1500U) < 50U);
             break;
 
         case STATE_ENTRY_DELAY:
-            /* Còi bíp dồn dập 4Hz (100ms ON / 150ms OFF). LED chớp nhanh */
-            if (Time_HasElapsed(now, last_buz_tick, 250U))
-            {
-                last_buz_tick = now;
-                Buzzer_SetState(true);
-                HAL_GPIO_WritePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin, GPIO_PIN_RESET);
-            }
-            else if (Time_HasElapsed(now, last_buz_tick, 100U))
-            {
-                Buzzer_SetState(false);
-                HAL_GPIO_WritePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin, GPIO_PIN_SET);
-            }
+            /* 4 Hz warning: 100ms ON / 150ms OFF, LED synchronized. */
+            buzzer_requested = ((phase % 250U) < 100U);
+            led_on = buzzer_requested;
             break;
 
         case STATE_TEMP_DISARM:
-            /* Còi tắt. LED chớp đúp 2 nhịp */
-            Buzzer_SetState(false);
-            if (Time_HasElapsed(now, last_led_tick, 1000U))
-            {
-                last_led_tick = now;
-                HAL_GPIO_TogglePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin);
-            }
+        {
+            /* Two 80ms pulses at the beginning of each 1s window. */
+            uint32_t double_blink_phase = phase % 1000U;
+            led_on = (double_blink_phase < 80U) ||
+                     (double_blink_phase >= 180U && double_blink_phase < 260U);
             break;
+        }
 
         case STATE_ALARM_EMERGE:
-            /* CÒI HÚ CỰC ĐẠI: Bật liên tục bằng PWM. LED chớp 10Hz */
-            Buzzer_SetState(true);
-            if (Time_HasElapsed(now, last_led_tick, 50U))
-            {
-                last_led_tick = now;
-                HAL_GPIO_TogglePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin);
-            }
+            /* Continuous siren; LED 10 Hz (50ms ON / 50ms OFF). */
+            buzzer_requested = true;
+            led_on = ((phase % 100U) < 50U);
             break;
 
         case STATE_TEMP_ALARM:
-            /* Sau khi xác thực báo động, còi vẫn hú đủ 30s để kiểm tra hiện trường. */
-            Buzzer_SetState(true);
-            if (Time_HasElapsed(now, last_led_tick, 500U))
+        {
+            /* Synchronized fade-out rhythm: each ON/OFF half-period grows
+               linearly from 125ms to 750ms over the 30s verification window. */
+            uint32_t fade_elapsed = (phase < TEMP_ALARM_MS) ? phase : TEMP_ALARM_MS;
+            uint32_t half_period = TEMP_ALARM_HALF_PERIOD_START_MS +
+                (uint32_t)(((uint64_t)fade_elapsed *
+                           (TEMP_ALARM_HALF_PERIOD_END_MS -
+                            TEMP_ALARM_HALF_PERIOD_START_MS)) / TEMP_ALARM_MS);
+
+            if (Time_HasElapsed(now, temp_alarm_toggle_tick, half_period))
             {
-                last_led_tick = now;
-                HAL_GPIO_TogglePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin);
+                temp_alarm_toggle_tick = now;
+                temp_alarm_output_on = !temp_alarm_output_on;
             }
+            buzzer_requested = temp_alarm_output_on;
+            led_on = temp_alarm_output_on;
             break;
+        }
     }
+
+    if (key_beep_active && Time_DeadlineReached(now, key_beep_deadline))
+        key_beep_active = false;
+
+    if (key_beep_active && currentState != STATE_ENTRY_DELAY &&
+        currentState != STATE_ALARM_EMERGE && currentState != STATE_TEMP_ALARM)
+        buzzer_requested = true;
+
+    Buzzer_SetState(buzzer_requested);
+    HAL_GPIO_WritePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin,
+                      led_on ? GPIO_PIN_RESET : GPIO_PIN_SET);
 }
 
 /* ==================================================================== */

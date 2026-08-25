@@ -418,13 +418,8 @@ int main(void)
       last_key = key;
       printf("[KEYPAD] Pressed: %c\r\n", key);
 
-      /* Bíp còi PWM phản hồi ngắn nếu không ở trạng thái còi đang kêu */
-      if (FSM_GetState() != STATE_ALARM_EMERGE && FSM_GetState() != STATE_ENTRY_DELAY)
-      {
-        Buzzer_SetState(true);
-        HAL_Delay(10);
-        Buzzer_SetState(false);
-      }
+      /* FSM overlays a 40ms key beep without blocking sensor processing. */
+      Buzzer_RequestKeyBeep();
     }
 
     /* --- TÁC VỤ 2: Xử lý Cảm biến Từ Cửa (Reed Switch) --- */
