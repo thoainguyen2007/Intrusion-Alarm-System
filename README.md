@@ -1,6 +1,14 @@
 # HỆ THỐNG BÁO ĐỘNG XÂM NHẬP (INTRUSION ALARM SYSTEM)
 ### STM32F103C8T6 (ARM Cortex-M3 @ 72MHz)
 
+Firmware báo động xâm nhập đa cảm biến sử dụng FSM 7 trạng thái, tích hợp Reed
+Switch, PIR HC-SR501, SW-420, keypad 4x4, OLED SH1106, còi PWM và nhật ký sự
+kiện MicroSD có khả năng phục hồi sau khi tháo/lỗi thẻ.
+
+> **Trạng thái dự án:** Nhánh `main` build thành công bằng CMake + Ninja + GNU
+> Arm Embedded Toolchain và đã được verify trên STM32F103C8T6 qua ST-Link V2.
+> Artifact chuẩn được sinh cục bộ trong `build/Debug/` và không lưu vào Git.
+
 > **Tên đề tài tiếng Anh:** STM32F103 Intrusion Alarm System with Multi-Sensor FSM
 >
 > **Tên đề tài tiếng Việt:** Hệ thống Báo động Xâm nhập Đa cảm biến dùng FSM trên STM32F103
@@ -36,6 +44,12 @@ Hệ thống Báo động Xâm nhập là một giải pháp an ninh nhúng th�
 * **Còi Báo động (Buzzer):** Phát âm thanh cảnh báo ngắt quãng hoặc còi hú khẩn cấp.
 * **Thẻ nhớ MicroSD (SPI1 + FATFS):** Ghi nhật ký chi tiết mốc thời gian, loại cảm biến kích hoạt và sự kiện hệ thống.
 * **Cổng Debug Serial (UART1):** Truyền log thời gian thực với tốc độ `115200 baud` lên máy tính.
+
+Firmware khởi động ở `DISARM`, ưu tiên sự kiện cửa/rung trước xác thực PIN trong
+các trạng thái bảo vệ, dùng watchdog để phục hồi vòng điều khiển bị treo và hiển
+thị toàn bộ quá trình xác minh/báo động trên OLED 128x64. `ENTRY_DELAY` có timeout
+tối đa 30 giây; chỉ cảnh báo do PIR mới được tự hủy khi PIR duy trì `READY` đủ
+15 giây, còn cảnh báo do rung được xử lý độc lập.
 
 Nhật ký SD dùng hàng đợi RAM 16 sự kiện: FSM chỉ enqueue, không gọi FatFs/SPI khi
 đang `EXIT_DELAY`, `ARMED`, `ENTRY_DELAY` hoặc còi hú `ALARM_EMERGE`.
@@ -220,8 +234,8 @@ Intrusion-Alarm-System/
 │   ├── Src/                    # Các file mã nguồn thực thi (.c)
 │   │   ├── main.c              # Chương trình chính & Vòng lặp tác vụ
 │   │   ├── sensors.c           # Hiện thực xử lý xung rung & lọc nhiễu
-│   │   ├── sd_spi.c             # Driver block MicroSD SPI và đọc CSD
-│   │   ├── sd_logger.c          # Queue nhật ký, ghi FatFs và phục hồi thẻ
+│   │   ├── sd_spi.c            # Driver block MicroSD SPI và đọc CSD
+│   │   ├── sd_logger.c         # Queue nhật ký, ghi FatFs và phục hồi thẻ
 │   │   ├── keypad.c            # Quét ma trận phím Non-blocking
 │   │   ├── ssd1306.c           # Điều khiển hiển thị OLED qua I2C
 │   │   ├── fonts.c             # Bitmap font chữ ma trận
@@ -282,6 +296,10 @@ build_and_flash.bat
    ```
 
 Không nạp một file HEX/ELF cũ từ layout `build\` cấp trên. Artifact chuẩn của dự án luôn nằm trong `build\Debug\` (hoặc `build\Release\` khi chủ động dùng preset Release).
+
+Lệnh build chỉ tạo firmware; thao tác flash luôn cần chọn đúng probe từ kết quả
+`STM32_Programmer_CLI.exe -l stlink`. Repository không chứa serial ST-Link hoặc
+đường dẫn riêng của bất kỳ thành viên nào.
 
 ---
 
