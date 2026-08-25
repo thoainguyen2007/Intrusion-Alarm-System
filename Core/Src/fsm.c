@@ -297,10 +297,77 @@ static void GetMaskedPin(char *dest, size_t dest_size)
     dest[i] = '\0';
 }
 
-static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_motion, VibLevel_t vib_level)
+#define OLED_TEXT_COLUMNS 18U
+
+static void OLED_PutsCentered(uint16_t y, const char *text)
+{
+    char line[OLED_TEXT_COLUMNS + 1U];
+    size_t length = strlen(text);
+    if (length > OLED_TEXT_COLUMNS) length = OLED_TEXT_COLUMNS;
+    memcpy(line, text, length);
+    line[length] = '\0';
+
+    uint16_t width = (uint16_t)(length * Font_7x10.FontWidth);
+    uint16_t x = (width < SSD1306_WIDTH) ? (uint16_t)((SSD1306_WIDTH - width) / 2U) : 0U;
+    SSD1306_GotoXY(x, y);
+    SSD1306_Puts(line, &Font_7x10, SSD1306_COLOR_WHITE);
+}
+
+static void OLED_DrawProgress(uint16_t y, uint32_t now,
+                              uint32_t start, uint32_t duration)
+{
+    const uint16_t outer_width = 124U;
+    const uint16_t inner_width = 120U;
+    uint32_t elapsed = now - start;
+    if (elapsed > duration) elapsed = duration;
+
+    uint16_t fill = (uint16_t)(((uint64_t)elapsed * inner_width) / duration);
+    SSD1306_DrawRectangle(2U, y, outer_width, 8U, SSD1306_COLOR_WHITE);
+    if (fill > 0U)
+    {
+        for (uint16_t row = y + 2U; row <= y + 5U; ++row)
+            SSD1306_DrawLine(4U, row, (uint16_t)(3U + fill), row, SSD1306_COLOR_WHITE);
+    }
+}
+
+static uint32_t OLED_RemainingFrom(uint32_t now, uint32_t start, uint32_t duration)
+{
+    uint32_t elapsed = now - start;
+    if (elapsed >= duration) return 0U;
+    return (duration - elapsed + 999U) / 1000U;
+}
+
+static void OLED_DrawNotice(const char *message, bool locked)
+{
+    char first[OLED_TEXT_COLUMNS + 1U] = "";
+    char second[OLED_TEXT_COLUMNS + 1U] = "";
+    size_t length = strlen(message);
+    size_t split = (length > OLED_TEXT_COLUMNS) ? OLED_TEXT_COLUMNS : length;
+
+    if (length > OLED_TEXT_COLUMNS)
+    {
+        while (split > 0U && message[split] != ' ') --split;
+        if (split == 0U) split = OLED_TEXT_COLUMNS;
+    }
+
+    memcpy(first, message, split);
+    first[split] = '\0';
+    while (split < length && message[split] == ' ') ++split;
+    size_t second_length = length - split;
+    if (second_length > OLED_TEXT_COLUMNS) second_length = OLED_TEXT_COLUMNS;
+    memcpy(second, &message[split], second_length);
+    second[second_length] = '\0';
+
+    OLED_PutsCentered(18U, first);
+    if (second[0] != '\0') OLED_PutsCentered(31U, second);
+    OLED_PutsCentered(47U, locked ? "PLEASE WAIT" : "CHECK AND RETRY");
+}
+
+static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_ready,
+                            bool pir_motion, VibLevel_t vib_level)
 {
     static uint32_t last_render_tick = 0;
-    if (!Time_HasElapsed(now, last_render_tick, 100U)) return; /* 10 FPS làm mới */
+    if (!Time_HasElapsed(now, last_render_tick, 200U)) return; /* 5 FPS, giảm tải I2C */
     last_render_tick = now;
 
     SSD1306_Fill(SSD1306_COLOR_BLACK);
@@ -308,19 +375,13 @@ static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_motion, VibLe
     char pin_display[8];
     GetMaskedPin(pin_display, sizeof(pin_display));
 
-    /* 1. Thanh tiêu đề trạng thái */
-    SSD1306_GotoXY(4, 2);
-    snprintf(buf, sizeof(buf), "[%s]", FSM_GetStateName(currentState));
-    SSD1306_Puts(buf, &Font_7x10, SSD1306_COLOR_WHITE);
-    SSD1306_DrawLine(0, 13, 127, 13, SSD1306_COLOR_WHITE);
+    OLED_PutsCentered(1U, FSM_GetStateName(currentState));
+    SSD1306_DrawLine(0U, 12U, 127U, 12U, SSD1306_COLOR_WHITE);
 
     /* 2. Kiểm tra nếu đang có banner lỗi thì ưu tiên hiển thị */
     if (error_banner[0] != '\0' && !Time_DeadlineReached(now, error_banner_timeout))
     {
-        SSD1306_GotoXY(2, 22);
-        SSD1306_Puts(error_banner, &Font_7x10, SSD1306_COLOR_WHITE);
-        SSD1306_GotoXY(2, 44);
-        SSD1306_Puts(pin_locked ? "Please wait..." : "Press any key...", &Font_7x10, SSD1306_COLOR_WHITE);
+        OLED_DrawNotice(error_banner, pin_locked);
         SSD1306_UpdateScreen();
         return;
     }
@@ -329,91 +390,84 @@ static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_motion, VibLe
     switch (currentState)
     {
         case STATE_DISARM:
-            SSD1306_GotoXY(2, 16);
-            SSD1306_Puts("PIN + [#] to ARM", &Font_7x10, SSD1306_COLOR_WHITE);
-            SSD1306_GotoXY(2, 30);
-            snprintf(buf, sizeof(buf), "PIN: [%s]", pin_display);
-            SSD1306_Puts(buf, &Font_7x10, SSD1306_COLOR_WHITE);
-            SSD1306_GotoXY(2, 46);
-            snprintf(buf, sizeof(buf), "Door:%-4s Vib:%s", door_open ? "OPEN" : "OK",
-                     (vib_level == VIB_HEAVY) ? "HVY" : (vib_level == VIB_LIGHT ? "LGT" : "OK"));
-            SSD1306_Puts(buf, &Font_7x10, SSD1306_COLOR_WHITE);
+            OLED_PutsCentered(15U, "SYSTEM STANDBY");
+            snprintf(buf, sizeof(buf), "PIN [%s]  #=ARM", pin_display);
+            OLED_PutsCentered(28U, buf);
+            snprintf(buf, sizeof(buf), "D:%s  V:%s", door_open ? "OPEN" : "OK",
+                     (vib_level == VIB_HEAVY) ? "HEAVY" : (vib_level == VIB_LIGHT ? "LIGHT" : "OK"));
+            OLED_PutsCentered(44U, buf);
             break;
 
         case STATE_EXIT_DELAY:
         {
             uint32_t remain = FSM_RemainingSeconds(now, EXIT_DELAY_MS);
-            SSD1306_GotoXY(2, 16);
-            snprintf(buf, sizeof(buf), "LEAVE HOME: %2lus", remain);
-            SSD1306_Puts(buf, &Font_7x10, SSD1306_COLOR_WHITE);
-            SSD1306_GotoXY(2, 30);
-            snprintf(buf, sizeof(buf), "PIN:[%s] Door:%-4s", pin_display, door_open ? "OPEN" : "OK");
-            SSD1306_Puts(buf, &Font_7x10, SSD1306_COLOR_WHITE);
-            SSD1306_GotoXY(2, 46);
-            SSD1306_Puts("PIN+[#] to Cancel", &Font_7x10, SSD1306_COLOR_WHITE);
+            OLED_PutsCentered(15U, "EXIT COUNTDOWN");
+            snprintf(buf, sizeof(buf), "ARM IN %2lus", remain);
+            OLED_PutsCentered(28U, buf);
+            snprintf(buf, sizeof(buf), "D:%s  #=CANCEL", door_open ? "OPEN" : "OK");
+            OLED_PutsCentered(41U, buf);
+            OLED_DrawProgress(55U, now, state_start_tick, EXIT_DELAY_MS);
             break;
         }
 
         case STATE_ARMED:
-            SSD1306_GotoXY(4, 16);
-            SSD1306_Puts("SYSTEM ARMED 24/7", &Font_7x10, SSD1306_COLOR_WHITE);
-            SSD1306_GotoXY(2, 30);
-            snprintf(buf, sizeof(buf), "PIN: [%s]", pin_display);
-            SSD1306_Puts(buf, &Font_7x10, SSD1306_COLOR_WHITE);
-            SSD1306_GotoXY(2, 46);
-            snprintf(buf, sizeof(buf), "Door:%-4s PIR:%-3s", door_open ? "OPEN" : "OK", pir_motion ? "MOV" : "OK");
-            SSD1306_Puts(buf, &Font_7x10, SSD1306_COLOR_WHITE);
+            OLED_PutsCentered(15U, "SECURITY ACTIVE");
+            snprintf(buf, sizeof(buf), "PIN [%s] #=OFF", pin_display);
+            OLED_PutsCentered(28U, buf);
+            snprintf(buf, sizeof(buf), "D:%s PIR:%s", door_open ? "OPEN" : "OK",
+                     !pir_ready ? "WARM" : (pir_motion ? "ACTIVE" : "READY"));
+            OLED_PutsCentered(44U, buf);
             break;
 
         case STATE_ENTRY_DELAY:
         {
             uint32_t remain = FSM_RemainingSeconds(now, ENTRY_DELAY_MS);
-            SSD1306_GotoXY(2, 16);
-            snprintf(buf, sizeof(buf), "ENTER PIN: %2lus", remain);
-            SSD1306_Puts(buf, &Font_7x10, SSD1306_COLOR_WHITE);
-            SSD1306_GotoXY(2, 30);
-            snprintf(buf, sizeof(buf), "PIN: [%s]", pin_display);
-            SSD1306_Puts(buf, &Font_7x10, SSD1306_COLOR_WHITE);
-            SSD1306_GotoXY(2, 46);
-            SSD1306_Puts("Press [#] to OK", &Font_7x10, SSD1306_COLOR_WHITE);
+            OLED_PutsCentered(15U, "VERIFY EVENT");
+            snprintf(buf, sizeof(buf), "PIN [%s] %2lus", pin_display, remain);
+            OLED_PutsCentered(28U, buf);
+            if (entry_pir_ready_tracking)
+            {
+                uint32_t quiet = OLED_RemainingFrom(now, entry_pir_ready_tick,
+                                                    ENTRY_PIR_READY_REARM_MS);
+                snprintf(buf, sizeof(buf), "QUIET:%2lus -> ARM", quiet);
+            }
+            else
+            {
+                snprintf(buf, sizeof(buf), "PIR:%s", !pir_ready ? "WARMUP" : "ACTIVE");
+            }
+            OLED_PutsCentered(41U, buf);
+            OLED_DrawProgress(55U, now, state_start_tick, ENTRY_DELAY_MS);
             break;
         }
 
         case STATE_TEMP_DISARM:
         {
             uint32_t remain = FSM_RemainingSeconds(now, TEMP_DISARM_MS);
-            SSD1306_GotoXY(2, 16);
-            SSD1306_Puts("WELCOME HOME (60s)", &Font_7x10, SSD1306_COLOR_WHITE);
-            SSD1306_GotoXY(2, 30);
-            snprintf(buf, sizeof(buf), "Auto-Arm in: %2lus", remain);
-            SSD1306_Puts(buf, &Font_7x10, SSD1306_COLOR_WHITE);
-            SSD1306_GotoXY(2, 46);
-            snprintf(buf, sizeof(buf), "Door:%-4s(Close it)", door_open ? "OPEN" : "OK");
-            SSD1306_Puts(buf, &Font_7x10, SSD1306_COLOR_WHITE);
+            OLED_PutsCentered(15U, "ACCESS WINDOW");
+            snprintf(buf, sizeof(buf), "AUTO ARM IN %2lus", remain);
+            OLED_PutsCentered(28U, buf);
+            snprintf(buf, sizeof(buf), "DOOR:%s", door_open ? "OPEN - CLOSE" : "CLOSED");
+            OLED_PutsCentered(41U, buf);
+            OLED_DrawProgress(55U, now, state_start_tick, TEMP_DISARM_MS);
             break;
         }
 
         case STATE_ALARM_EMERGE:
-            SSD1306_GotoXY(2, 16);
-            SSD1306_Puts("!! SIREN ALARM !!", &Font_7x10, SSD1306_COLOR_WHITE);
-            SSD1306_GotoXY(2, 30);
-            snprintf(buf, sizeof(buf), "PIN: [%s]", pin_display);
-            SSD1306_Puts(buf, &Font_7x10, SSD1306_COLOR_WHITE);
-            SSD1306_GotoXY(2, 46);
-            SSD1306_Puts("PIN+[#] TO STOP!", &Font_7x10, SSD1306_COLOR_WHITE);
+            OLED_PutsCentered(15U, "INTRUSION ALERT");
+            snprintf(buf, sizeof(buf), "PIN [%s]", pin_display);
+            OLED_PutsCentered(28U, buf);
+            OLED_PutsCentered(44U, "PIN + # = VERIFY");
             break;
 
         case STATE_TEMP_ALARM:
         {
             uint32_t remain = FSM_RemainingSeconds(now, TEMP_ALARM_MS);
-            SSD1306_GotoXY(2, 16);
-            SSD1306_Puts("INSPECT AREA (30s)", &Font_7x10, SSD1306_COLOR_WHITE);
-            SSD1306_GotoXY(2, 30);
-            snprintf(buf, sizeof(buf), "Time Left: %2lus", remain);
-            SSD1306_Puts(buf, &Font_7x10, SSD1306_COLOR_WHITE);
-            SSD1306_GotoXY(2, 46);
-            snprintf(buf, sizeof(buf), "Door:%-4s(Close it)", door_open ? "OPEN" : "OK");
-            SSD1306_Puts(buf, &Font_7x10, SSD1306_COLOR_WHITE);
+            OLED_PutsCentered(15U, "VERIFYING EVENT");
+            snprintf(buf, sizeof(buf), "SIREN ON  %2lus", remain);
+            OLED_PutsCentered(28U, buf);
+            snprintf(buf, sizeof(buf), "DOOR:%s", door_open ? "OPEN - CLOSE" : "CLOSED");
+            OLED_PutsCentered(41U, buf);
+            OLED_DrawProgress(55U, now, state_start_tick, TEMP_ALARM_MS);
             break;
         }
     }
@@ -640,5 +694,5 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
     }
 
     FSM_Update_Outputs(now);
-    FSM_Render_OLED(now, door_open, pir_motion, vib_level);
+    FSM_Render_OLED(now, door_open, pir_ready, pir_motion, vib_level);
 }
