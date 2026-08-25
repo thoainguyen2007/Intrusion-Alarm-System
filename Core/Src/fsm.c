@@ -40,6 +40,8 @@ static SystemState_t currentState = STATE_DISARM;
 static uint32_t state_start_tick = 0;
 static bool entry_pir_ready_tracking = false;
 static uint32_t entry_pir_ready_tick = 0;
+static bool entry_vib_quiet_tracking = false;
+static uint32_t entry_vib_quiet_tick = 0;
 typedef enum {
     ENTRY_TRIGGER_NONE = 0,
     ENTRY_TRIGGER_PIR,
@@ -127,6 +129,7 @@ static void FSM_TransitionTo(SystemState_t next_state, uint32_t now, const char 
     FSM_ClearPin();
     Vibration_Reset();
     entry_pir_ready_tracking = false;
+    entry_vib_quiet_tracking = false;
     if (next_state != STATE_ENTRY_DELAY) entry_trigger = ENTRY_TRIGGER_NONE;
 
     printf("\r\n[FSM] %s\r\n", reason);
@@ -179,6 +182,8 @@ void FSM_Init(void)
     pin_lockout_deadline = 0;
     entry_pir_ready_tracking = false;
     entry_pir_ready_tick = 0U;
+    entry_vib_quiet_tracking = false;
+    entry_vib_quiet_tick = 0U;
     entry_trigger = ENTRY_TRIGGER_NONE;
     error_banner[0] = '\0';
     error_banner_timeout = 0;
@@ -348,6 +353,22 @@ static void OLED_PutsCentered(uint16_t y, const char *text)
     SSD1306_Puts(line, &Font_7x10, SSD1306_COLOR_WHITE);
 }
 
+static void OLED_PutsColumn(uint16_t x, uint16_t width, uint16_t y,
+                            const char *text)
+{
+    char line[9];
+    size_t length = strlen(text);
+    if (length > 8U) length = 8U;
+    memcpy(line, text, length);
+    line[length] = '\0';
+
+    uint16_t text_width = (uint16_t)(length * Font_7x10.FontWidth);
+    uint16_t text_x = x;
+    if (text_width < width) text_x = (uint16_t)(x + (width - text_width) / 2U);
+    SSD1306_GotoXY(text_x, y);
+    SSD1306_Puts(line, &Font_7x10, SSD1306_COLOR_WHITE);
+}
+
 static void OLED_DrawProgress(uint16_t y, uint32_t now,
                               uint32_t start, uint32_t duration)
 {
@@ -457,23 +478,35 @@ static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_ready,
         case STATE_ENTRY_DELAY:
         {
             uint32_t remain = FSM_RemainingSeconds(now, ENTRY_DELAY_MS);
+            uint32_t pir_quiet = entry_pir_ready_tracking
+                ? OLED_RemainingFrom(now, entry_pir_ready_tick,
+                                     ENTRY_PIR_READY_REARM_MS)
+                : ENTRY_PIR_READY_REARM_MS / 1000U;
+            uint32_t vib_quiet = entry_vib_quiet_tracking
+                ? OLED_RemainingFrom(now, entry_vib_quiet_tick,
+                                     ENTRY_VIB_QUIET_REARM_MS)
+                : ENTRY_VIB_QUIET_REARM_MS / 1000U;
+            bool pir_ok = entry_pir_ready_tracking && (pir_quiet == 0U);
+            bool vib_ok = entry_vib_quiet_tracking && (vib_quiet == 0U);
+            char pir_col[9];
+            char vib_col[9];
+
             OLED_PutsCentered(15U, "VERIFY EVENT");
             snprintf(buf, sizeof(buf), "PIN [%s] %2lus", pin_display, remain);
             OLED_PutsCentered(28U, buf);
-            if (entry_trigger == ENTRY_TRIGGER_PIR && entry_pir_ready_tracking)
-            {
-                uint32_t quiet = OLED_RemainingFrom(now, entry_pir_ready_tick,
-                                                    ENTRY_PIR_READY_REARM_MS);
-                snprintf(buf, sizeof(buf), "QUIET:%2lus -> ARM", quiet);
-            }
-            else
-            {
-                snprintf(buf, sizeof(buf), "%s:%s",
-                         entry_trigger == ENTRY_TRIGGER_PIR ? "PIR" : "VIB",
-                         entry_trigger == ENTRY_TRIGGER_PIR
-                             ? (!pir_ready ? "WARMUP" : "ACTIVE") : "VERIFY");
-            }
-            OLED_PutsCentered(41U, buf);
+
+            if (pir_ok) snprintf(pir_col, sizeof(pir_col), "PIR:OK");
+            else if (!pir_ready) snprintf(pir_col, sizeof(pir_col), "PIR:WARM");
+            else if (pir_motion) snprintf(pir_col, sizeof(pir_col), "PIR:ACT");
+            else snprintf(pir_col, sizeof(pir_col), "PIR:%lus", pir_quiet);
+
+            if (vib_ok) snprintf(vib_col, sizeof(vib_col), "VIB:OK");
+            else if (vib_level == VIB_LIGHT) snprintf(vib_col, sizeof(vib_col), "VIB:LGT");
+            else snprintf(vib_col, sizeof(vib_col), "VIB:%lus", vib_quiet);
+
+            SSD1306_DrawLine(63U, 40U, 63U, 52U, SSD1306_COLOR_WHITE);
+            OLED_PutsColumn(0U, 62U, 41U, pir_col);
+            OLED_PutsColumn(65U, 63U, 41U, vib_col);
             OLED_DrawProgress(55U, now, state_start_tick, ENTRY_DELAY_MS);
             break;
         }
@@ -643,11 +676,9 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
             break;
 
         case STATE_ENTRY_DELAY:
-            if (entry_trigger != ENTRY_TRIGGER_PIR)
-            {
-                entry_pir_ready_tracking = false;
-            }
-            else if (!pir_ready || pir_motion)
+            /* Hai cột xác minh độc lập. Mỗi cảm biến chỉ reset bộ đếm của
+               chính nó; cả PIR và rung phải cùng OK mới hủy cảnh báo giả. */
+            if (!pir_ready || pir_motion)
             {
                 if (entry_pir_ready_tracking)
                     printf("[FSM] ENTRY_DELAY: PIR READY timer cancelled.\r\n");
@@ -657,7 +688,20 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
             {
                 entry_pir_ready_tracking = true;
                 entry_pir_ready_tick = now;
-                printf("[FSM] ENTRY_DELAY: PIR READY timer started (15s).\r\n");
+                printf("[FSM] ENTRY_DELAY: PIR READY timer started (10s).\r\n");
+            }
+
+            if (vib_level == VIB_LIGHT)
+            {
+                if (entry_vib_quiet_tracking)
+                    printf("[FSM] ENTRY_DELAY: VIB quiet timer reset by LIGHT.\r\n");
+                entry_vib_quiet_tracking = false;
+            }
+            else if (vib_level == VIB_NONE && !entry_vib_quiet_tracking)
+            {
+                entry_vib_quiet_tracking = true;
+                entry_vib_quiet_tick = now;
+                printf("[FSM] ENTRY_DELAY: VIB quiet timer started (5s).\r\n");
             }
 
             if (vib_level == VIB_HEAVY)
@@ -670,13 +714,15 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
                 FSM_TransitionTo(STATE_ALARM_EMERGE, now,
                                  "ENTRY_DELAY -> ALARM_EMERGE (door opened)");
             }
-            else if (entry_trigger == ENTRY_TRIGGER_PIR &&
-                     entry_pir_ready_tracking &&
+            else if (entry_pir_ready_tracking &&
                      Time_HasElapsed(now, entry_pir_ready_tick,
-                                     ENTRY_PIR_READY_REARM_MS))
+                                     ENTRY_PIR_READY_REARM_MS) &&
+                     entry_vib_quiet_tracking &&
+                     Time_HasElapsed(now, entry_vib_quiet_tick,
+                                     ENTRY_VIB_QUIET_REARM_MS))
             {
                 FSM_TransitionTo(STATE_ARMED, now,
-                                 "ENTRY_DELAY -> ARMED (PIR READY for 15s)");
+                                 "ENTRY_DELAY -> ARMED (PIR/VIB verification OK)");
             }
             else if (Time_HasElapsed(now, state_start_tick, ENTRY_DELAY_MS))
             {
@@ -688,7 +734,7 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
                 FSM_TransitionTo(STATE_TEMP_DISARM, now,
                                  "ENTRY_DELAY -> TEMP_DISARM (valid PIN)");
             }
-            /* PIR ACTIVE hủy bộ đếm READY; cửa mở luôn là xâm nhập. */
+            /* PIR ACTIVE và VIB LIGHT chỉ reset cột tương ứng. */
             break;
 
         case STATE_TEMP_DISARM:

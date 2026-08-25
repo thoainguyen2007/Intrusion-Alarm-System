@@ -135,7 +135,7 @@ stateDiagram-v2
     ARMED --> ALARM_EMERGE: cửa mở / rung mạnh
 
     ENTRY_DELAY --> TEMP_DISARM: PIN đúng
-    ENTRY_DELAY --> ARMED: chỉ entry do PIR và PIR READY liên tục 15s
+    ENTRY_DELAY --> ARMED: PIR READY 10s và VIB yên 5s
     ENTRY_DELAY --> ALARM_EMERGE: cửa mở / hết 30s / rung mạnh
 
     TEMP_DISARM --> DISARM: PIN đúng
@@ -153,7 +153,7 @@ stateDiagram-v2
 3. **`ARMED` (Vũ trang / Giám sát toàn diện):** Hệ thống giám sát chặt chẽ:
    * Nếu PIR phát hiện chuyển động hoặc có rung nhẹ $\rightarrow$ Chuyển sang `ENTRY DELAY` để xác thực PIN trước khi báo động.
    * Nếu cửa mở hoặc có rung mạnh ($\ge 20$ xung) $\rightarrow$ Nhảy thẳng sang `ALARM EMERGE`.
-4. **`ENTRY DELAY` (Cảnh báo sớm - tối đa 30s):** PIR và rung nhẹ là hai nguồn kích hoạt độc lập. Cửa mở/rung mạnh luôn được xét trước PIN và chuyển ngay sang `ALARM EMERGE`. Nếu an toàn, PIN đúng $\rightarrow$ `TEMP DISARM`. Mốc 30s là timeout tối đa, không phải thời gian bắt buộc phải chờ: riêng entry do PIR có thể tự về `ARMED` sớm khi PIR đã warm-up và duy trì `READY` liên tục 15s. Entry do rung nhẹ không dùng trạng thái PIR để tự hủy và sẽ chờ PIN hoặc timeout 30s.
+4. **`ENTRY DELAY` (Cảnh báo sớm - tối đa 30s):** PIR và rung nhẹ là hai cột xác minh độc lập. PIR phải duy trì `READY` liên tục 10s; rung phải không còn mức `LIGHT` liên tục 5s. PIR hoạt động lại hoặc rung nhẹ xuất hiện lại chỉ reset bộ đếm tương ứng. Chỉ khi cả hai cột cùng `OK` hệ thống mới tự trở về `ARMED`. Cửa mở/rung mạnh luôn được xét trước PIN và chuyển ngay sang `ALARM EMERGE`; PIN đúng khi an toàn $\rightarrow$ `TEMP DISARM`.
 5. **`TEMP DISARM` (Giải trừ tạm thời - 60s):** Cấp quyền 60s để bốc dỡ hàng hóa hoặc chuyển đồ vào nhà. Rung mạnh vẫn kích hoạt báo động. Hết 60s: nếu cửa đã đóng $\rightarrow$ tự động `ARMED`; nếu cửa vẫn mở $\rightarrow$ `ALARM EMERGE`.
 6. **`ALARM EMERGE` (Báo động khẩn cấp):** Còi hú liên tục. Chỉ khi cửa đã đóng và PIN đúng hệ thống mới cho qua lớp an ninh để vào `TEMP ALARM`; PIN đúng khi cửa còn mở bị từ chối.
 7. **`TEMP ALARM` (Xác minh báo động - 30s):** LED và buzzer bắt đầu nháy/hú nhanh rồi chậm dần đồng bộ trong 30s; mỗi nửa chu kỳ tăng tuyến tính từ 125ms lên 750ms. Trạng thái không nhận PIN thứ hai để thoát sớm. Nếu cửa mở lại ở bất kỳ thời điểm nào, hệ thống lập tức quay về `ALARM EMERGE`; chỉ một khoảng đủ 30s với cửa luôn đóng mới về `ARMED`.
@@ -172,11 +172,11 @@ Mã PIN có đúng 4 chữ số. Sau 5 lần xác nhận sai, bàn phím bị kh
 | **TC04** | `ARMED` | PIR hoặc rung nhẹ | Chuyển sang **`ENTRY_DELAY`** 30s. Cửa mở hoặc rung mạnh chuyển ngay sang `ALARM_EMERGE`. |
 | **TC05** | `ENTRY DELAY` | Nhập đúng mã PIN trước 30s | Chuyển sang **`TEMP DISARM`** (60s). |
 | **TC06** | `ENTRY DELAY` | Hết 30s mà chưa nhập đúng PIN | Kích hoạt tức thì **`ALARM EMERGE`**; còi hú và sự kiện được enqueue để ghi SD ở cửa sổ I/O an toàn tiếp theo. |
-| **TC07** | `ENTRY DELAY` | Cửa mở, rung mạnh hoặc chạm timeout tối đa 30s | Chuyển thẳng sang **`ALARM EMERGE`**. Chỉ entry do PIR được phép tự hủy sớm sau 15s `READY`; entry do rung không tự hủy. |
+| **TC07** | `ENTRY DELAY` | Cửa mở, rung mạnh hoặc chạm timeout tối đa 30s | Chuyển thẳng sang **`ALARM EMERGE`** nếu hai cột xác minh chưa cùng đạt `OK`. |
 | **TC08** | `TEMP DISARM` | Hết 60s và Cửa đã đóng lại | Tự động kích hoạt lại trạng thái **`ARMED`**. |
 | **TC09** | `TEMP DISARM` | Hết 60s nhưng Cửa vẫn để mở | Kích hoạt **`ALARM EMERGE`** báo động quên đóng cửa. |
 | **TC10** | `ALARM EMERGE` | Đóng cửa rồi nhập đúng PIN xác minh | Chuyển sang **`TEMP ALARM`**, LED/buzzer nhanh rồi chậm dần trong 30s. Mở cửa lại trong khoảng này lập tức quay về `ALARM_EMERGE`; cửa đóng liên tục đủ 30s thì về `ARMED`. |
-| **TC11** | `ENTRY DELAY` do PIR | PIR đã warm-up và `READY` liên tục 15s, cửa vẫn đóng, không rung mạnh | Hủy cảnh báo giả và tự trở lại **`ARMED`**. PIR ACTIVE lại trước 15s sẽ reset bộ đếm READY. Entry do rung nhẹ không áp dụng quy tắc này. |
+| **TC11** | `ENTRY DELAY` | PIR `READY` liên tục 10s và rung yên liên tục 5s, cửa vẫn đóng | Hủy cảnh báo giả và tự trở lại **`ARMED`**. PIR hoặc rung nhẹ tái xuất hiện chỉ reset bộ đếm của cột tương ứng. |
 
 ---
 

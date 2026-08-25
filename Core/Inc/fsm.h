@@ -17,7 +17,8 @@
 
 #define EXIT_DELAY_MS           15000       /* Thời gian trễ rời nhà (15 giây) */
 #define ENTRY_DELAY_MS          30000U      /* Timeout tối đa để xác minh sự kiện (30 giây) */
-#define ENTRY_PIR_READY_REARM_MS 15000U      /* PIR READY liên tục 15s: hủy cảnh báo giả */
+#define ENTRY_PIR_READY_REARM_MS 10000U      /* PIR READY liên tục 10s: xác nhận an toàn */
+#define ENTRY_VIB_QUIET_REARM_MS  5000U      /* Không còn rung nhẹ liên tục 5s: xác nhận an toàn */
 #define TEMP_DISARM_MS          60000       /* Thời gian giải trừ tạm thời (60 giây) */
 #define TEMP_ALARM_MS           30000       /* Thời gian kiểm tra hiện trường (30 giây) */
 
