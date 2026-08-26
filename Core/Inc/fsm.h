@@ -19,7 +19,7 @@
 #define ENTRY_DELAY_MS          30000U      /* Timeout tối đa để xác minh sự kiện (30 giây) */
 #define ENTRY_PIR_READY_REARM_MS 10000U      /* PIR READY liên tục 10s: xác nhận an toàn */
 #define ENTRY_VIB_QUIET_REARM_MS  5000U      /* Không còn rung nhẹ liên tục 5s: xác nhận an toàn */
-#define TEMP_DISARM_MS          60000       /* Thời gian giải trừ tạm thời (60 giây) */
+#define TEMP_DISARM_MS          30000U      /* Xác minh giải trừ an toàn (30 giây) */
 #define TEMP_ALARM_MS           30000       /* Thời gian kiểm tra hiện trường (30 giây) */
 
 /* ==================================================================== */
@@ -30,7 +30,7 @@ typedef enum {
     STATE_EXIT_DELAY,       /* 2. Đếm ngược rời nhà (15s) */
     STATE_ARMED,            /* 3. Canh gác / Bảo vệ an ninh toàn diện */
     STATE_ENTRY_DELAY,      /* 4. Đếm ngược vào nhà & nhập mã (30s) */
-    STATE_TEMP_DISARM,      /* 5. Vô hiệu hóa tạm thời bốc đồ (60s) */
+    STATE_TEMP_DISARM,      /* 5. Chờ giải trừ an toàn, cửa phải luôn đóng (30s) */
     STATE_ALARM_EMERGE,     /* 6. Báo động khẩn cấp / Còi hú cực đại */
     STATE_TEMP_ALARM        /* 7. Báo động tạm thời kiểm tra hiện trường (30s) */
 } SystemState_t;

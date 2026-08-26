@@ -457,8 +457,9 @@ int main(void)
     SystemState_t logger_state = FSM_GetState();
     /* Mỗi lần chỉ ghi tối đa một record, có rate-limit; tuyệt đối không truy
        cập FatFs khi canh gác, entry delay hoặc trong cả hai trạng thái còi hú. */
-    bool logger_io_allowed = (logger_state == STATE_DISARM ||
-                              logger_state == STATE_TEMP_DISARM);
+    /* TEMP_DISARM now verifies door/vibration continuously for 30s, so it is
+       security-critical and must not be delayed by blocking FatFs/SPI I/O. */
+    bool logger_io_allowed = (logger_state == STATE_DISARM);
     SD_Logger_Process(logger_io_allowed);
 
     Watchdog_Refresh();

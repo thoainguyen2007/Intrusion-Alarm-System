@@ -230,9 +230,11 @@ const char* FSM_GetPinBuffer(void)
 
 void Buzzer_RequestKeyBeep(void)
 {
-    /* ENTRY_DELAY already has a fast warning pattern. Alarm states own the
-       siren continuously and must never be interrupted by keypad feedback. */
+    /* ENTRY_DELAY already has a fast warning pattern. TEMP_DISARM is an
+       automatic 30s safety verification and ignores further PIN input.
+       Alarm states own the siren and must not be interrupted by key beeps. */
     if (currentState == STATE_ENTRY_DELAY ||
+        currentState == STATE_TEMP_DISARM ||
         currentState == STATE_ALARM_EMERGE ||
         currentState == STATE_TEMP_ALARM)
         return;
@@ -314,6 +316,7 @@ static void FSM_Update_Outputs(uint32_t now)
         key_beep_active = false;
 
     if (key_beep_active && currentState != STATE_ENTRY_DELAY &&
+        currentState != STATE_TEMP_DISARM &&
         currentState != STATE_ALARM_EMERGE && currentState != STATE_TEMP_ALARM)
         buzzer_requested = true;
 
@@ -514,10 +517,10 @@ static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_ready,
         case STATE_TEMP_DISARM:
         {
             uint32_t remain = FSM_RemainingSeconds(now, TEMP_DISARM_MS);
-            OLED_PutsCentered(15U, "ACCESS WINDOW");
-            snprintf(buf, sizeof(buf), "AUTO ARM IN %2lus", remain);
+            OLED_PutsCentered(15U, "VERIFYING SAFE");
+            snprintf(buf, sizeof(buf), "DISARM IN %2lus", remain);
             OLED_PutsCentered(28U, buf);
-            snprintf(buf, sizeof(buf), "DOOR:%s", door_open ? "OPEN - CLOSE" : "CLOSED");
+            snprintf(buf, sizeof(buf), "DOOR:%s", door_open ? "OPEN - ALARM" : "CLOSED");
             OLED_PutsCentered(41U, buf);
             OLED_DrawProgress(55U, now, state_start_tick, TEMP_DISARM_MS);
             break;
@@ -573,7 +576,8 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
         SD_Log_Event("PIN keypad lockout expired");
     }
 
-    if (!pin_locked && currentState != STATE_TEMP_ALARM &&
+    if (!pin_locked && currentState != STATE_TEMP_DISARM &&
+        currentState != STATE_TEMP_ALARM &&
         key_pressed != 0 && key_pressed != '-')
     {
         if (key_pressed >= '0' && key_pressed <= '9')
@@ -743,17 +747,15 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
                 FSM_TransitionTo(STATE_ALARM_EMERGE, now,
                                  "TEMP_DISARM -> ALARM_EMERGE (heavy vibration)");
             }
+            else if (door_open)
+            {
+                FSM_TransitionTo(STATE_ALARM_EMERGE, now,
+                                 "TEMP_DISARM -> ALARM_EMERGE (door opened)");
+            }
             else if (Time_HasElapsed(now, state_start_tick, TEMP_DISARM_MS))
             {
-                FSM_TransitionTo(door_open ? STATE_ALARM_EMERGE : STATE_ARMED, now,
-                                 door_open
-                                     ? "TEMP_DISARM -> ALARM_EMERGE (door left open)"
-                                     : "TEMP_DISARM -> ARMED (auto-rearm)");
-            }
-            else if (is_pin_correct)
-            {
                 FSM_TransitionTo(STATE_DISARM, now,
-                                 "TEMP_DISARM -> DISARM (valid PIN)");
+                                 "TEMP_DISARM -> DISARM (30s safe)");
             }
             break;
 
