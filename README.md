@@ -165,6 +165,61 @@ Mã PIN có đúng 4 chữ số. Sau 5 lần xác nhận sai, bàn phím bị kh
 
 ---
 
+### 3.2. Bảng Chân Trị Hợp Nhất 8 Tổ Hợp Cảm Biến Nhị Phân (Truth Table 2³ = 8)
+
+Bảng chân trị chuẩn mô tả phản ứng của hệ thống đối với $2^3 = 8$ tổ hợp cảm biến nhị phân đầu vào: **Cửa ($D$)**, **PIR ($P$)**, **Rung ($V$)** trên từng trạng thái bảo vệ:
+
+* **Quy ước mức logic:**
+  * $D$ (Door): `0` = Đóng, `1` = Mở
+  * $P$ (PIR): `0` = Yên tĩnh (OFF), `1` = Có thân nhiệt chuyển động (ACTIVE)
+  * $V$ (Vibration): `0` = Yên tĩnh (`NONE`), `1` = Có rung chấn (`LIGHT` hoặc `HEAVY`)
+
+| STT | $D$ | $P$ | $V$ | Tình Trạng Cảm Biến Thực Tế | Hành Vi Khi Đang `ARMED` | Hành Vi Khi `ENTRY_DELAY` (30s) | Hành Vi Khi `TEMP_DISARM` (60s) |
+| :---: | :---: | :---: | :---: | :--- | :--- | :--- | :--- |
+| **0** | **`0`** | **`0`** | **`0`** | Môi trường an toàn, tĩnh lặng | Duy trì canh gác `ARMED` | Đếm lùi tự Re-arm (10s/5s) $\to$ `ARMED` | Đếm lùi an toàn $\to$ `DISARM` |
+| **1** | **`0`** | **`0`** | **`1`** | Cửa đóng, có chấn động rung | Rung nhẹ $\to$ `ENTRY_DELAY`<br>Rung mạnh $\to$ `ALARM_EMERGE` | Reset bộ đếm rung yên tĩnh<br>(Rung mạnh $\to$ `ALARM_EMERGE`) | Bỏ qua rung (cho phép bốc hàng) |
+| **2** | **`0`** | **`1`** | **`0`** | Cửa đóng, phát hiện thân nhiệt | Chuyển sang `ENTRY_DELAY` (xác minh) | Reset bộ đếm PIR READY | Bỏ qua PIR (cho phép bốc hàng) |
+| **3** | **`0`** | **`1`** | **`1`** | Cửa đóng, vừa có người vừa rung | Chuyển sang `ENTRY_DELAY`<br>(Rung mạnh $\to$ `ALARM_EMERGE`) | Reset cả 2 bộ đếm xác minh | Bỏ qua (cho phép bốc hàng) |
+| **4** | **`1`** | **`0`** | **`0`** | Cửa bị mở ra (đột nhập) | Kích hoạt ngay **`ALARM_EMERGE`** | Kích hoạt ngay **`ALARM_EMERGE`** | Cảnh báo 15s cuối $\to$ Hết 60s `ALARM` |
+| **5** | **`1`** | **`0`** | **`1`** | Cửa mở + có rung | Kích hoạt ngay **`ALARM_EMERGE`** | Kích hoạt ngay **`ALARM_EMERGE`** | Cảnh báo 15s cuối $\to$ Hết 60s `ALARM` |
+| **6** | **`1`** | **`1`** | **`0`** | Cửa mở + có người bước vào | Kích hoạt ngay **`ALARM_EMERGE`** | Kích hoạt ngay **`ALARM_EMERGE`** | Cảnh báo 15s cuối $\to$ Hết 60s `ALARM` |
+| **7** | **`1`** | **`1`** | **`1`** | Cửa mở + người + rung đập phá | Kích hoạt ngay **`ALARM_EMERGE`** | Kích hoạt ngay **`ALARM_EMERGE`** | Cảnh báo 15s cuối $\to$ Hết 60s `ALARM` |
+
+#### Bảng Phản Ứng Tương Tác Bàn Phím (Mã PIN):
+
+| Trạng Thái Hiện Tại | Nhập Đúng PIN (`1234#`) | Nhập Sai PIN | Sau 5 Lần Nhập Sai |
+| :--- | :--- | :--- | :--- |
+| **`DISARM`** | Cửa đóng $\to$ Sang `EXIT_DELAY` (15s)<br>Cửa mở $\to$ Từ chối ARM (báo lỗi) | Báo `WRONG PIN` | Khóa phím 30 giây (`PIN LOCKED`) |
+| **`EXIT_DELAY`** | Hủy đếm lùi $\to$ Quay về `DISARM` | Báo `WRONG PIN` | Khóa phím 30 giây |
+| **`ARMED`** | Chuyển ngay về `DISARM` | Báo `WRONG PIN` | Khóa phím 30 giây |
+| **`ENTRY_DELAY`** | Cửa đóng $\to$ Sang `TEMP_DISARM` (60s) | Báo `WRONG PIN` | Khóa phím 30 giây |
+| **`TEMP_DISARM`** | Chuyển ngay về `DISARM` (can thiệp thủ công) | Báo `WRONG PIN` | Khóa phím 30 giây |
+| **`ALARM_EMERGE`**| Cửa đóng $\to$ Sang `TEMP_ALARM` (30s)<br>Cửa mở $\to$ Từ chối (`CLOSE DOOR FIRST`) | Báo `WRONG PIN` | Khóa phím 30 giây |
+| **`TEMP_ALARM`** | Không nhận PIN (đang kiểm tra hiện trường) | Không nhận PIN | — |
+
+---
+
+### 3.3. Các Cửa Sổ Tương Quan Thời Gian (Time Windows & Filter Parameters)
+
+| Hằng Số Định Nghĩa | Giá Trị | Đơn Vị | Chức Năng Chi Tiết |
+| :--- | :---: | :---: | :--- |
+| `REED_DEBOUNCE_MS` | `50` | ms | Thời gian xác nhận tiếp điểm công tắc từ cửa ổn định sau ngắt `EXTI0`. |
+| `VIB_GLITCH_FILTER_MS` | `8` | ms | Bộ lọc chống dội lò xo cơ học ngắt `EXTI2` của module rung SW-420. |
+| `VIB_WINDOW_MS` | `1000` | ms | Cửa sổ trượt tích lũy xung rung (0-4: `NONE`, 6-19: `LIGHT`, $\ge 20$: `HEAVY`). |
+| `PIR_WARMUP_MS` | `30000` | ms | Thời gian làm ấm mắt cảm biến PIR HC-SR501 sau khi cấp nguồn (30 giây). |
+| `PIR_STABLE_MS` | `1750` | ms | Mức OUT của PIR phải giữ liên tục $\ge 1.75\text{s}$ mới xác nhận chuyển động thật. |
+| `PIR_BLOCKING_MS` | `1000` | ms | Thời gian giữ ON trong phần mềm sau khi OUT hạ LOW trước khi công bố READY. |
+| `EXIT_DELAY_MS` | `15000` | ms | Thời gian đếm lùi rời nhà để người dùng bước ra ngoài và đóng cửa (15 giây). |
+| `ENTRY_DELAY_MS` | `30000` | ms | Thời gian tối đa để xác thực PIN khi có cảnh báo sớm trước khi hú còi (30 giây). |
+| `ENTRY_PIR_READY_REARM_MS` | `10000` | ms | Thời gian PIR phải duy trì READY liên tục để tự hủy cảnh báo giả (10 giây). |
+| `ENTRY_VIB_QUIET_REARM_MS` | `5000` | ms | Thời gian rung phải duy trì NONE liên tục để tự hủy cảnh báo giả (5 giây). |
+| `TEMP_DISARM_MS` | `60000` | ms | Cửa sổ bốc dỡ hàng hóa và xác minh an toàn đóng cửa (60 giây). |
+| `TEMP_DISARM_WARN_MS` | `45000` | ms | Mốc kích hoạt cảnh báo bíp tăng dần ($500\text{ms} \to 250\text{ms} \to 100\text{ms}$) ở 15s cuối. |
+| `TEMP_ALARM_MS` | `30000` | ms | Thời gian kiểm tra hiện trường fade-out đồng bộ LED & Buzzer (30 giây). |
+| `PIN_LOCKOUT_MS` | `30000` | ms | Thời gian vô hiệu hóa bàn phím sau 5 lần nhập sai mã PIN liên tiếp (30 giây). |
+
+---
+
 ## 4. KỊCH BẢN KIỂM THỬ HOẠT ĐỘNG (TEST CASES TC01 - TC11)
 
 | Mã Test | Trạng Thái Bắt Đầu | Sự Kiện Kích Hoạt | Kết Quả Mong Đợi / Chuyển Trạng Thái |
