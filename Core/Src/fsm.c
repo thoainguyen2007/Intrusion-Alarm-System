@@ -230,11 +230,9 @@ const char* FSM_GetPinBuffer(void)
 
 void Buzzer_RequestKeyBeep(void)
 {
-    /* ENTRY_DELAY already has a fast warning pattern. TEMP_DISARM is an
-       automatic 30s safety verification and ignores further PIN input.
+    /* ENTRY_DELAY already has a fast warning pattern.
        Alarm states own the siren and must not be interrupted by key beeps. */
     if (currentState == STATE_ENTRY_DELAY ||
-        currentState == STATE_TEMP_DISARM ||
         currentState == STATE_ALARM_EMERGE ||
         currentState == STATE_TEMP_ALARM)
         return;
@@ -278,10 +276,47 @@ static void FSM_Update_Outputs(uint32_t now)
 
         case STATE_TEMP_DISARM:
         {
-            /* Two 80ms pulses at the beginning of each 1s window. */
-            uint32_t double_blink_phase = phase % 1000U;
-            led_on = (double_blink_phase < 80U) ||
-                     (double_blink_phase >= 180U && double_blink_phase < 260U);
+            if (phase < TEMP_DISARM_WARN_MS)
+            {
+                /* Giai đoạn 1 (0s -> 45s - Bốc dỡ hàng hóa yên tĩnh): Còi tắt hoàn toàn */
+                buzzer_requested = false;
+                /* LED chớp đôi mỗi 1 giây */
+                uint32_t double_blink_phase = phase % 1000U;
+                led_on = (double_blink_phase < 80U) ||
+                         (double_blink_phase >= 180U && double_blink_phase < 260U);
+            }
+            else
+            {
+                /* Giai đoạn 2 (45s -> 60s - Nhắc nhở 15 giây cuối): */
+                if (log_door_open)
+                {
+                    /* Cửa vẫn mở: Còi bíp tăng dần tần số (500ms -> 250ms -> 100ms) */
+                    if (phase < 50000U)
+                    {
+                        /* 45s - 50s: Chu kỳ 500ms (100ms ON / 400ms OFF) */
+                        buzzer_requested = ((phase % 500U) < 100U);
+                    }
+                    else if (phase < 55000U)
+                    {
+                        /* 50s - 55s: Chu kỳ 250ms (80ms ON / 170ms OFF) */
+                        buzzer_requested = ((phase % 250U) < 80U);
+                    }
+                    else
+                    {
+                        /* 55s - 60s: Chu kỳ 100ms (50ms ON / 50ms OFF) dồn dập */
+                        buzzer_requested = ((phase % 100U) < 50U);
+                    }
+                    led_on = buzzer_requested;
+                }
+                else
+                {
+                    /* Cửa đã đóng: Còi tắt */
+                    buzzer_requested = false;
+                    uint32_t double_blink_phase = phase % 1000U;
+                    led_on = (double_blink_phase < 80U) ||
+                             (double_blink_phase >= 180U && double_blink_phase < 260U);
+                }
+            }
             break;
         }
 
@@ -316,9 +351,11 @@ static void FSM_Update_Outputs(uint32_t now)
         key_beep_active = false;
 
     if (key_beep_active && currentState != STATE_ENTRY_DELAY &&
-        currentState != STATE_TEMP_DISARM &&
         currentState != STATE_ALARM_EMERGE && currentState != STATE_TEMP_ALARM)
-        buzzer_requested = true;
+    {
+        if (currentState != STATE_TEMP_DISARM || phase < TEMP_DISARM_WARN_MS || !log_door_open)
+            buzzer_requested = true;
+    }
 
     Buzzer_SetState(buzzer_requested);
     HAL_GPIO_WritePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin,
@@ -461,7 +498,7 @@ static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_ready,
         {
             uint32_t remain = FSM_RemainingSeconds(now, EXIT_DELAY_MS);
             OLED_PutsCentered(15U, "EXIT COUNTDOWN");
-            snprintf(buf, sizeof(buf), "ARM IN %2lus", remain);
+            snprintf(buf, sizeof(buf), "PIN [%s] %2lus", pin_display, remain);
             OLED_PutsCentered(28U, buf);
             snprintf(buf, sizeof(buf), "D:%s  #=CANCEL", door_open ? "OPEN" : "OK");
             OLED_PutsCentered(41U, buf);
@@ -517,11 +554,47 @@ static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_ready,
         case STATE_TEMP_DISARM:
         {
             uint32_t remain = FSM_RemainingSeconds(now, TEMP_DISARM_MS);
-            OLED_PutsCentered(15U, "VERIFYING SAFE");
-            snprintf(buf, sizeof(buf), "DISARM IN %2lus", remain);
-            OLED_PutsCentered(28U, buf);
-            snprintf(buf, sizeof(buf), "DOOR:%s", door_open ? "OPEN - ALARM" : "CLOSED");
-            OLED_PutsCentered(41U, buf);
+            uint32_t phase = now - state_start_tick;
+
+            if (phase < TEMP_DISARM_WARN_MS)
+            {
+                /* Giai đoạn 1 (0s -> 45s): Bốc dỡ hàng yên tĩnh */
+                OLED_PutsCentered(15U, "TEMP DISARM");
+                snprintf(buf, sizeof(buf), "PIN [%s] %2lus", pin_display, remain);
+                OLED_PutsCentered(28U, buf);
+                snprintf(buf, sizeof(buf), "DOOR: %s", door_open ? "OPEN (UNLOAD)" : "CLOSED");
+                OLED_PutsCentered(41U, buf);
+            }
+            else
+            {
+                /* Giai đoạn 2 (45s -> 60s): Nhắc nhở 15 giây cuối */
+                if (door_open)
+                {
+                    /* Cửa vẫn mở: Chớp nháy dòng chữ cảnh báo "! PLEASE CLOSE DOOR !" */
+                    bool blink = ((now / 250U) % 2U) == 0U;
+                    if (blink)
+                    {
+                        OLED_PutsCentered(15U, "! PLEASE !");
+                        OLED_PutsCentered(28U, "! CLOSE DOOR !");
+                    }
+                    else
+                    {
+                        OLED_PutsCentered(15U, "WARNING: 15s LEFT");
+                        snprintf(buf, sizeof(buf), "PIN [%s]", pin_display);
+                        OLED_PutsCentered(28U, buf);
+                    }
+                    snprintf(buf, sizeof(buf), "CLOSE IN: %2lus", remain);
+                    OLED_PutsCentered(41U, buf);
+                }
+                else
+                {
+                    /* Cửa đã đóng an toàn */
+                    OLED_PutsCentered(15U, "TEMP DISARM");
+                    snprintf(buf, sizeof(buf), "PIN [%s] %2lus", pin_display, remain);
+                    OLED_PutsCentered(28U, buf);
+                    OLED_PutsCentered(41U, "DOOR: CLOSED (OK)");
+                }
+            }
             OLED_DrawProgress(55U, now, state_start_tick, TEMP_DISARM_MS);
             break;
         }
@@ -576,8 +649,7 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
         SD_Log_Event("PIN keypad lockout expired");
     }
 
-    if (!pin_locked && currentState != STATE_TEMP_DISARM &&
-        currentState != STATE_TEMP_ALARM &&
+    if (!pin_locked && currentState != STATE_TEMP_ALARM &&
         key_pressed != 0 && key_pressed != '-')
     {
         if (key_pressed >= '0' && key_pressed <= '9')
@@ -742,20 +814,30 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
             break;
 
         case STATE_TEMP_DISARM:
-            if (vib_level == VIB_HEAVY)
+            /* Trong suốt thời gian ở TEMP_DISARM:
+             * 1) Bỏ qua hoàn toàn tín hiệu từ PIR và Cảm biến rung.
+             * 2) Cho phép nhập đúng mã PIN bất kỳ lúc nào để về DISARM.
+             * 3) Hết 60s (t >= TEMP_DISARM_MS):
+             *    - Nếu Cửa ĐÃ ĐÓNG (!door_open) -> Chuyển sang STATE_DISARM.
+             *    - Nếu Cửa VẪN MỞ (door_open)  -> Chuyển sang STATE_ALARM_EMERGE.
+             */
+            if (is_pin_correct)
             {
-                FSM_TransitionTo(STATE_ALARM_EMERGE, now,
-                                 "TEMP_DISARM -> ALARM_EMERGE (heavy vibration)");
-            }
-            else if (door_open)
-            {
-                FSM_TransitionTo(STATE_ALARM_EMERGE, now,
-                                 "TEMP_DISARM -> ALARM_EMERGE (door opened)");
+                FSM_TransitionTo(STATE_DISARM, now,
+                                 "TEMP_DISARM -> DISARM (valid PIN override)");
             }
             else if (Time_HasElapsed(now, state_start_tick, TEMP_DISARM_MS))
             {
-                FSM_TransitionTo(STATE_DISARM, now,
-                                 "TEMP_DISARM -> DISARM (30s safe)");
+                if (door_open)
+                {
+                    FSM_TransitionTo(STATE_ALARM_EMERGE, now,
+                                     "TEMP_DISARM -> ALARM_EMERGE (timeout, door left open)");
+                }
+                else
+                {
+                    FSM_TransitionTo(STATE_DISARM, now,
+                                     "TEMP_DISARM -> DISARM (timeout, door closed)");
+                }
             }
             break;
 

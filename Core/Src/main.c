@@ -48,8 +48,8 @@
 /* USER CODE BEGIN PD */
 #define PIR_WARMUP_MS         30000   /* Thời gian khởi động cảm biến PIR (30 giây) */
 #define REED_DEBOUNCE_MS      50      /* Chống dội tiếp điểm từ cửa (50ms) */
-#define PIR_STABLE_MS         200U    /* Mức OUT phải ổn định trước khi chấp nhận */
-#define PIR_BLOCKING_MS       2500U   /* HC-SR501: giữ ON qua khoảng khóa sau xung */
+#define PIR_STABLE_MS         1750U    /* Mức OUT phải ổn định trước khi chấp nhận */
+#define PIR_BLOCKING_MS       1000U   /* HC-SR501: giữ ON qua khoảng khóa sau xung */
 #define PIR_REPORT_MS         1000U   /* Chu kỳ báo trạng thái PIR qua UART */
 /* USER CODE END PD */
 
