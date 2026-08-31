@@ -128,29 +128,29 @@ Hệ thống hoạt động dựa trên máy trạng thái hữu hạn phân c�
 stateDiagram-v2
     [*] --> DISARM: Cấp nguồn / Khởi động
 
-    DISARM --> EXIT_DELAY: Nhập PIN đúng (Cửa đóng)
-    EXIT_DELAY --> DISARM: Nhập PIN hủy / Hết 15s (Cửa vẫn mở - Arm Failed)
-    EXIT_DELAY --> ARMED: Hết 15s (Cửa đóng)
+    DISARM --> EXIT_DELAY: Nhập PIN đúng<br>(Cửa đóng)
+    EXIT_DELAY --> DISARM: Nhập PIN hủy / Hết 15s<br>(Cửa vẫn mở - Arm Failed)
+    EXIT_DELAY --> ARMED: Hết 15s<br>(Cửa đóng)
 
     ARMED --> DISARM: Nhập PIN đúng
-    ARMED --> ENTRY_DELAY: PIR phát hiện / rung nhẹ
-    ARMED --> ALARM_EMERGE: Cửa mở / rung mạnh
+    ARMED --> ENTRY_DELAY: PIR phát hiện<br>/ Rung nhẹ
+    ARMED --> ALARM_EMERGE: Cửa mở<br>/ Rung mạnh
 
-    ENTRY_DELAY --> DISARM: Nhập PIN Master 6789 (Về nhà ở luôn)
-    ENTRY_DELAY --> TEMP_DISARM: Nhập PIN Temp 1234 (Lấy đồ nhanh 60s)
-    ENTRY_DELAY --> ARMED: Auto-rearm (PIR READY 10s & Rung yên 5s)
-    ENTRY_DELAY --> ALARM_EMERGE: Cửa mở / hết 30s / rung mạnh
+    ENTRY_DELAY --> DISARM: Nhập PIN Master 6789<br>(Về nhà ở luôn)
+    ENTRY_DELAY --> TEMP_DISARM: Nhập PIN Temp 1234<br>(Lấy đồ nhanh 60s)
+    ENTRY_DELAY --> ARMED: Auto-rearm<br>(PIR READY 10s & Rung yên 5s)
+    ENTRY_DELAY --> ALARM_EMERGE: Cửa mở / Rung mạnh<br>/ Hết 30s
 
-    TEMP_DISARM --> ARMED: Hết 60s (Cửa đã đóng - Auto-rearm)
-    TEMP_DISARM --> ALARM_EMERGE: Hết 60s và cửa vẫn mở
+    TEMP_DISARM --> ARMED: Hết 60s (Cửa đã đóng)<br>Auto-rearm
+    TEMP_DISARM --> ALARM_EMERGE: Hết 60s<br>(Cửa vẫn mở)
 
-    state ALARM_EMERGE {
-        [*] --> Phase1_Siren: Kích hoạt báo động
-        Phase1_Siren --> Phase2_Cooldown: Cửa ĐÓNG + Đúng PIN
-        Phase2_Cooldown --> Phase1_Siren: Cửa mở lại / Rung mạnh
-    }
+    ALARM_EMERGE --> ARMED: Đủ 30s Cooldown an toàn<br>/ Nhập đúng PIN (Auto-rearm)
 
-    Phase2_Cooldown --> ARMED: Đủ 30s an toàn / Nhập đúng PIN (Về ARMED)
+    note right of ALARM_EMERGE
+        Trạng thái Báo động phân cấp gồm 2 Pha:
+        • Pha 1: Còi hú khẩn cấp 2kHz (Siren)
+        • Pha 2: Cooldown hạ nhiệt 30s khi Đóng cửa + Đúng PIN
+    end note
 ```
 
 ### Chi tiết các trạng thái & Cơ chế Dual-PIN:
