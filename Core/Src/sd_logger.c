@@ -112,7 +112,7 @@ void SD_Logger_BeginSession(const char *reset_reason)
     (void)SD_Logger_Enqueue("========== NEW BOOT SESSION ==========");
     (void)snprintf(message, sizeof(message), "BOOT reset_cause=%s", reason);
     (void)SD_Logger_Enqueue(message);
-    (void)SD_Logger_Enqueue("FW version=2.1 fsm=7-state log=event-snapshot");
+    (void)SD_Logger_Enqueue("FW version=2.1 fsm=6-state log=event-snapshot");
 }
 
 void SD_Logger_Process(bool allow_io)

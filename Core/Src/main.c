@@ -48,7 +48,7 @@
 /* USER CODE BEGIN PD */
 #define PIR_WARMUP_MS         30000   /* Thời gian khởi động cảm biến PIR (30 giây) */
 #define REED_DEBOUNCE_MS      50      /* Chống dội tiếp điểm từ cửa (50ms) */
-#define PIR_STABLE_MS         1750U    /* Mức OUT phải ổn định trước khi chấp nhận */
+#define PIR_STABLE_MS         1400U    /* Mức OUT phải ổn định trước khi chấp nhận */
 #define PIR_BLOCKING_MS       1000U   /* HC-SR501: giữ ON qua khoảng khóa sau xung */
 #define PIR_REPORT_MS         1000U   /* Chu kỳ báo trạng thái PIR qua UART */
 /* USER CODE END PD */
@@ -319,7 +319,7 @@ int main(void)
     SSD1306_GotoXY(22U, 26U);
     SSD1306_Puts("SYSTEM READY", &Font_7x10, SSD1306_COLOR_WHITE);
     SSD1306_GotoXY(1U, 44U);
-    SSD1306_Puts("7-STATE FSM ACTIVE", &Font_7x10, SSD1306_COLOR_WHITE);
+    SSD1306_Puts("6-STATE FSM ACTIVE", &Font_7x10, SSD1306_COLOR_WHITE);
     SSD1306_UpdateScreen();
     oled_splash_tick = HAL_GetTick();
   }
@@ -399,8 +399,12 @@ int main(void)
   if (oled_ready && splash_elapsed < 1000U)
     HAL_Delay(1000U - splash_elapsed);
 
-  /* Khởi tạo Máy trạng thái hữu hạn FSM 7 trạng thái */
+  /* Khởi tạo Máy trạng thái hữu hạn FSM 6 trạng thái phân cấp (Tự động ngắt còi ban đầu) */
   FSM_Init();
+
+  /* Bật Timer 2 (MicroSD Timeout / Chống đếm tràn) */
+  HAL_TIM_Base_Start(&htim2);
+
   /* Start only after all potentially slow boot diagnostics have completed. */
   Watchdog_Init();
   /* USER CODE END 2 */
@@ -411,7 +415,7 @@ int main(void)
   {
     uint32_t now = HAL_GetTick();
 
-    /* --- TÁC VỤ 1: Quét phím Keypad 4x4 --- */
+    /* --- TÁC VỤ 1: Quét phím Keypad 4x4 (Non-blocking) --- */
     char key = Keypad_GetKey();
     if (key != KEYPAD_NO_KEY)
     {
@@ -422,17 +426,17 @@ int main(void)
       Buzzer_RequestKeyBeep();
     }
 
-    /* --- TÁC VỤ 2: Xử lý Cảm biến Từ Cửa (Reed Switch) --- */
+    /* --- TÁC VỤ 2: Khử rung Cảm biến Từ Cửa (KY-003) --- */
     Reed_ProcessDebounce(now);
     if (reed_triggered == 0 && was_reed_triggered == 1)
     {
-      /* Cửa vừa đóng: Reset xung do chấn động lúc sập cửa, bắt đầu giám sát rung */
+      /* Cửa vừa đóng: Reset rung do sập cửa và kích hoạt giám sát */
       Vibration_Reset();
-      printf("[SENSOR] REED: Door CLOSED. Vibration monitoring active.\r\n");
+      printf("[SENSOR] KY-003: Door CLOSED. Vibration monitoring active.\r\n");
     }
     else if (reed_triggered == 1 && was_reed_triggered == 0)
     {
-      printf("[SENSOR] REED: Door OPEN!\r\n");
+      printf("[SENSOR] KY-003: Door OPEN!\r\n");
     }
     was_reed_triggered = reed_triggered;
 
@@ -447,7 +451,7 @@ int main(void)
       Sensors_Process_Window(reed_triggered == 0);
     }
 
-    /* --- TÁC VỤ 5: ĐIỀU PHỐI MÁY TRẠNG THÁI FSM 7 TRẠNG THÁI --- */
+    /* --- TÁC VỤ 5: ĐIỀU PHỐI MÁY TRẠNG THÁI FSM 6 TRẠNG THÁI --- */
     /* FSM sẽ tự động quản lý còi Buzzer, LED Heartbeat/Siren, OLED UI và chuyển trạng thái */
     bool is_door_open = (reed_triggered == 1);
     bool is_pir_active = (pir_ready && pir_triggered == 1);
