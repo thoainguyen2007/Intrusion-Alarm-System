@@ -125,32 +125,33 @@ LED và buzzer theo nhịp giảm dần trong 30 giây.
 Hệ thống hoạt động dựa trên máy trạng thái hữu hạn phân cấp gồm 6 trạng thái cốt lõi với hệ thống phân quyền **Dual-PIN (Mã PIN Kép: 1234 / 6789)**. `STATE_ALARM_EMERGE` được thiết kế dưới dạng trạng thái phân cấp (Hierarchical State) tích hợp 2 Pha xử lý liên hoàn (Siren hú cực đại $\rightarrow$ Cooldown hạ nhiệt 30s $\rightarrow$ Tự động về `ARMED`):
 
 ```mermaid
-stateDiagram-v2
-    [*] --> DISARM: Cấp nguồn / Khởi động
+flowchart TD
+    Start(["● Cấp nguồn / Khởi động"]) --> DISARM
 
-    DISARM --> EXIT_DELAY: Nhập PIN đúng<br>(Cửa đóng)
-    EXIT_DELAY --> DISARM: Nhập PIN hủy / Hết 15s<br>(Cửa vẫn mở - Arm Failed)
-    EXIT_DELAY --> ARMED: Hết 15s<br>(Cửa đóng)
+    DISARM["<b>DISARM</b><br><i>(Giải trừ / Chờ)</i>"]
+    EXIT_DELAY["<b>EXIT_DELAY</b><br><i>(Đếm lùi rời nhà 15s)</i>"]
+    ARMED["<b>ARMED</b><br><i>(Vũ trang / Giám sát)</i>"]
+    ENTRY_DELAY["<b>ENTRY_DELAY</b><br><i>(Cảnh báo sớm 30s)</i>"]
+    TEMP_DISARM["<b>TEMP_DISARM</b><br><i>(Lấy đồ nhanh 60s)</i>"]
+    ALARM_EMERGE["<b>ALARM_EMERGE</b><br><i>(Báo động khẩn & Cooldown 30s)</i>"]
 
-    ARMED --> DISARM: Nhập PIN đúng
-    ARMED --> ENTRY_DELAY: PIR phát hiện<br>/ Rung nhẹ
-    ARMED --> ALARM_EMERGE: Cửa mở<br>/ Rung mạnh
+    DISARM -- "Nhập PIN đúng (Cửa đóng)" --> EXIT_DELAY
+    EXIT_DELAY -- "Nhập PIN hủy / Hết 15s (Cửa vẫn mở - Arm Failed)" --> DISARM
+    EXIT_DELAY -- "Hết 15s (Cửa đóng)" --> ARMED
 
-    ENTRY_DELAY --> DISARM: Nhập PIN Master 6789<br>(Về nhà ở luôn)
-    ENTRY_DELAY --> TEMP_DISARM: Nhập PIN Temp 1234<br>(Lấy đồ nhanh 60s)
-    ENTRY_DELAY --> ARMED: Auto-rearm<br>(PIR READY 10s & Rung yên 5s)
-    ENTRY_DELAY --> ALARM_EMERGE: Cửa mở / Rung mạnh<br>/ Hết 30s
+    ARMED -- "Nhập PIN đúng" --> DISARM
+    ARMED -- "PIR phát hiện / Rung nhẹ" --> ENTRY_DELAY
+    ARMED -- "Cửa mở / Rung mạnh" --> ALARM_EMERGE
 
-    TEMP_DISARM --> ARMED: Hết 60s (Cửa đã đóng)<br>Auto-rearm
-    TEMP_DISARM --> ALARM_EMERGE: Hết 60s<br>(Cửa vẫn mở)
+    ENTRY_DELAY -- "Nhập PIN Master 6789 (Về nhà ở luôn)" --> DISARM
+    ENTRY_DELAY -- "Nhập PIN Temp 1234 (Lấy đồ nhanh 60s)" --> TEMP_DISARM
+    ENTRY_DELAY -- "Auto-rearm (PIR READY 10s & Rung yên 5s)" --> ARMED
+    ENTRY_DELAY -- "Cửa mở / Rung mạnh / Hết 30s" --> ALARM_EMERGE
 
-    ALARM_EMERGE --> ARMED: Đủ 30s Cooldown an toàn<br>/ Nhập đúng PIN (Auto-rearm)
+    TEMP_DISARM -- "Hết 60s (Cửa đã đóng - Auto-rearm)" --> ARMED
+    TEMP_DISARM -- "Hết 60s mà cửa vẫn mở" --> ALARM_EMERGE
 
-    note right of ALARM_EMERGE
-        Trạng thái Báo động phân cấp gồm 2 Pha:
-        • Pha 1: Còi hú khẩn cấp 2kHz (Siren)
-        • Pha 2: Cooldown hạ nhiệt 30s khi Đóng cửa + Đúng PIN
-    end note
+    ALARM_EMERGE -- "Đủ 30s Cooldown an toàn / Nhập đúng PIN (Auto-rearm)" --> ARMED
 ```
 
 ### Chi tiết các trạng thái & Cơ chế Dual-PIN:
