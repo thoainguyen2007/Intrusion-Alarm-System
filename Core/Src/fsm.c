@@ -67,13 +67,11 @@ static uint32_t error_banner_timeout = 0;
 /* Key feedback is an overlay owned by the FSM, never a blocking direct write. */
 static bool key_beep_active = false;
 static uint32_t key_beep_deadline = 0U;
-static bool temp_alarm_output_on = true;
-static uint32_t temp_alarm_toggle_tick = 0U;
-static bool alarm_in_cooldown = false;          /* false = Pha 1 Siren, true = Pha 2 Cooldown */
-static uint32_t alarm_cooldown_start_tick = 0U; /* Mốc thời gian bắt đầu Cooldown */
+static bool cooldown_output_on = true;
+static uint32_t cooldown_toggle_tick = 0U;
 
-#define TEMP_ALARM_HALF_PERIOD_START_MS 125U
-#define TEMP_ALARM_HALF_PERIOD_END_MS   750U
+#define COOLDOWN_HALF_PERIOD_START_MS 125U
+#define COOLDOWN_HALF_PERIOD_END_MS   750U
 
 /* ==================================================================== */
 /*                  HÀM GHI NHẬT KÝ THẺ NHỚ SD (FATFS)                  */
@@ -122,9 +120,10 @@ static void FSM_TransitionTo(SystemState_t next_state, uint32_t now, const char 
     SD_Log_Event(reason);
     currentState = next_state;
     state_start_tick = now;
-    if (next_state == STATE_ALARM_EMERGE)
+    if (next_state == STATE_ALARM_COOLDOWN)
     {
-        alarm_in_cooldown = false; /* Luôn bắt đầu từ Pha 1 Siren */
+        cooldown_output_on = true;
+        cooldown_toggle_tick = now;
     }
     error_banner[0] = '\0';
     FSM_ClearPin();
@@ -190,8 +189,8 @@ void FSM_Init(void)
     error_banner_timeout = 0;
     key_beep_active = false;
     key_beep_deadline = 0U;
-    temp_alarm_output_on = true;
-    temp_alarm_toggle_tick = state_start_tick;
+    cooldown_output_on = true;
+    cooldown_toggle_tick = state_start_tick;
 
     Buzzer_Init();
     Buzzer_SetState(false);
@@ -219,6 +218,7 @@ const char* FSM_GetStateName(SystemState_t state)
         case STATE_ENTRY_DELAY: return "ENTRY DELAY";
         case STATE_TEMP_DISARM: return "TEMP DISARM";
         case STATE_ALARM_EMERGE:return "ALARM EMERGE";
+        case STATE_ALARM_COOLDOWN:return "ALARM COOLDOWN";
         default:                return "UNKNOWN";
     }
 }
@@ -233,7 +233,10 @@ void Buzzer_RequestKeyBeep(void)
     /* ENTRY_DELAY already has a fast warning pattern.
        Alarm states own the siren and must not be interrupted by key beeps. */
     if (currentState == STATE_ENTRY_DELAY ||
-        (currentState == STATE_ALARM_EMERGE && !alarm_in_cooldown))
+        currentState == STATE_ALARM_EMERGE ||
+        currentState == STATE_ARMED ||
+        currentState == STATE_TEMP_DISARM ||
+        currentState == STATE_ALARM_COOLDOWN)
         return;
 
     key_beep_active = true;
@@ -320,31 +323,27 @@ static void FSM_Update_Outputs(uint32_t now)
         }
 
         case STATE_ALARM_EMERGE:
-        {
-            if (!alarm_in_cooldown)
-            {
-                /* Pha 1 SIREN: Còi hú 2kHz liên tục, LED 10Hz */
-                buzzer_requested = true;
-                led_on = ((phase % 100U) < 50U);
-            }
-            else
-            {
-                /* Pha 2 COOLDOWN: Còi + LED nháy chậm dần đồng bộ (125ms -> 750ms) */
-                uint32_t cd_elapsed = now - alarm_cooldown_start_tick;
-                if (cd_elapsed > TEMP_ALARM_MS) cd_elapsed = TEMP_ALARM_MS;
-                uint32_t half_period = TEMP_ALARM_HALF_PERIOD_START_MS +
-                    (uint32_t)(((uint64_t)cd_elapsed *
-                               (TEMP_ALARM_HALF_PERIOD_END_MS -
-                                TEMP_ALARM_HALF_PERIOD_START_MS)) / TEMP_ALARM_MS);
+            /* Còi hú liên tục, LED 10 Hz. */
+            buzzer_requested = true;
+            led_on = ((phase % 100U) < 50U);
+            break;
 
-                if (Time_HasElapsed(now, temp_alarm_toggle_tick, half_period))
-                {
-                    temp_alarm_toggle_tick = now;
-                    temp_alarm_output_on = !temp_alarm_output_on;
-                }
-                buzzer_requested = temp_alarm_output_on;
-                led_on = temp_alarm_output_on;
+        case STATE_ALARM_COOLDOWN:
+        {
+            uint32_t elapsed = phase;
+            if (elapsed > ALARM_COOLDOWN_MS) elapsed = ALARM_COOLDOWN_MS;
+            uint32_t half_period = COOLDOWN_HALF_PERIOD_START_MS +
+                (uint32_t)(((uint64_t)elapsed *
+                           (COOLDOWN_HALF_PERIOD_END_MS -
+                            COOLDOWN_HALF_PERIOD_START_MS)) / ALARM_COOLDOWN_MS);
+
+            if (Time_HasElapsed(now, cooldown_toggle_tick, half_period))
+            {
+                cooldown_toggle_tick = now;
+                cooldown_output_on = !cooldown_output_on;
             }
+            buzzer_requested = cooldown_output_on;
+            led_on = cooldown_output_on;
             break;
         }
     }
@@ -353,10 +352,12 @@ static void FSM_Update_Outputs(uint32_t now)
         key_beep_active = false;
 
     if (key_beep_active && currentState != STATE_ENTRY_DELAY &&
-        !(currentState == STATE_ALARM_EMERGE && !alarm_in_cooldown))
+        currentState != STATE_ALARM_EMERGE &&
+        currentState != STATE_ARMED &&
+        currentState != STATE_TEMP_DISARM &&
+        currentState != STATE_ALARM_COOLDOWN)
     {
-        if (currentState != STATE_TEMP_DISARM || phase < TEMP_DISARM_WARN_MS || !log_door_open)
-            buzzer_requested = true;
+        buzzer_requested = true;
     }
 
     Buzzer_SetState(buzzer_requested);
@@ -510,8 +511,7 @@ static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_ready,
 
         case STATE_ARMED:
             OLED_PutsCentered(15U, "SECURITY ACTIVE");
-            snprintf(buf, sizeof(buf), "PIN [%s] #=OFF", pin_display);
-            OLED_PutsCentered(28U, buf);
+            OLED_PutsCentered(28U, "SENSORS MONITORED");
             snprintf(buf, sizeof(buf), "D:%s PIR:%s", door_open ? "OPEN" : "OK",
                      !pir_ready ? "WARM" : (pir_motion ? "ACTIVE" : "READY"));
             OLED_PutsCentered(44U, buf);
@@ -602,27 +602,21 @@ static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_ready,
         }
 
         case STATE_ALARM_EMERGE:
+            OLED_PutsCentered(15U, "INTRUSION ALERT");
+            snprintf(buf, sizeof(buf), "PIN [%s]", pin_display);
+            OLED_PutsCentered(28U, buf);
+            OLED_PutsCentered(44U, "CLOSE DOOR + PIN");
+            break;
+
+        case STATE_ALARM_COOLDOWN:
         {
-            if (!alarm_in_cooldown)
-            {
-                /* Pha 1: Cảnh báo còi hú và ô nhập PIN */
-                OLED_PutsCentered(15U, "INTRUSION ALERT");
-                snprintf(buf, sizeof(buf), "PIN [%s]", pin_display);
-                OLED_PutsCentered(28U, buf);
-                OLED_PutsCentered(44U, "PIN + # = VERIFY");
-            }
-            else
-            {
-                /* Pha 2: Đếm ngược 30s hạ nhiệt (giao diện như TEMP_ALARM cũ) */
-                uint32_t cd_elapsed2 = now - alarm_cooldown_start_tick;
-                uint32_t remain2 = (cd_elapsed2 >= TEMP_ALARM_MS) ? 0U : ((TEMP_ALARM_MS - cd_elapsed2 + 999U) / 1000U);
-                OLED_PutsCentered(15U, "VERIFYING EVENT");
-                snprintf(buf, sizeof(buf), "SIREN ON  %2lus", remain2);
-                OLED_PutsCentered(28U, buf);
-                snprintf(buf, sizeof(buf), "DOOR:%s", door_open ? "OPEN - CLOSE" : "CLOSED");
-                OLED_PutsCentered(41U, buf);
-                OLED_DrawProgress(55U, now, alarm_cooldown_start_tick, TEMP_ALARM_MS);
-            }
+            uint32_t remain = FSM_RemainingSeconds(now, ALARM_COOLDOWN_MS);
+            OLED_PutsCentered(15U, "VERIFYING EVENT");
+            snprintf(buf, sizeof(buf), "COOLDOWN: %2lus", remain);
+            OLED_PutsCentered(28U, buf);
+            snprintf(buf, sizeof(buf), "DOOR:%s", door_open ? "OPEN - CLOSE" : "CLOSED");
+            OLED_PutsCentered(41U, buf);
+            OLED_DrawProgress(55U, now, state_start_tick, ALARM_COOLDOWN_MS);
             break;
         }
     }
@@ -633,6 +627,14 @@ static void FSM_Render_OLED(uint32_t now, bool door_open, bool pir_ready,
 /* ==================================================================== */
 /*                   XỬ LÝ CHUYỂN DỊCH TRẠNG THÁI CHÍNH                 */
 /* ==================================================================== */
+static bool FSM_PinInputAllowed(SystemState_t state)
+{
+    return state == STATE_DISARM ||
+           state == STATE_EXIT_DELAY ||
+           state == STATE_ENTRY_DELAY ||
+           state == STATE_ALARM_EMERGE;
+}
+
 void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
                  bool pir_motion, VibLevel_t vib_level)
 {
@@ -640,7 +642,7 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
     bool pin_submitted = false;
     bool is_pin_correct = false;
 
-    bool is_pin_temp = false;
+    bool is_pin_arm = false;
     bool is_pin_master = false;
 
     /* One coherent sensor snapshot is attached to every event produced during
@@ -660,7 +662,15 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
         SD_Log_Event("PIN keypad lockout expired");
     }
 
-    if (!pin_locked &&
+    bool pin_input_allowed = FSM_PinInputAllowed(currentState);
+    if (!pin_input_allowed)
+    {
+        /* Không để phím bấm ở ARMED/TEMP_DISARM/COOLDOWN tồn tại trong
+           buffer hoặc vô tình làm tăng bộ đếm PIN sai. */
+        FSM_ClearPin();
+    }
+
+    if (pin_input_allowed && !pin_locked &&
         key_pressed != 0 && key_pressed != '-')
     {
         if (key_pressed >= '0' && key_pressed <= '9')
@@ -678,11 +688,11 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
         else if (key_pressed == '#')
         {
             pin_submitted = true;
-            is_pin_temp = (pin_idx == PIN_LENGTH &&
-                           strcmp(pin_buffer, PIN_TEMP_DISARM) == 0);
+            is_pin_arm = (pin_idx == PIN_LENGTH &&
+                          strcmp(pin_buffer, PIN_ARM_REARM) == 0);
             is_pin_master = (pin_idx == PIN_LENGTH &&
                              strcmp(pin_buffer, PIN_MASTER_DISARM) == 0);
-            is_pin_correct = (is_pin_temp || is_pin_master);
+            is_pin_correct = (is_pin_arm || is_pin_master);
             if (is_pin_correct) failed_pin_attempts = 0;
         }
     }
@@ -693,10 +703,11 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
      * 2) PIN chỉ được xét sau khi chu kỳ hiện tại vượt qua lớp an ninh.
      * 3) Ghi nhận PIN sai sau cùng để không che mất sự kiện an ninh.
      */
+    SystemState_t state_before_events = currentState;
     switch (currentState)
     {
         case STATE_DISARM:
-            if (is_pin_correct)
+            if (is_pin_arm)
             {
                 if (door_open)
                 {
@@ -707,16 +718,28 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
                 else
                 {
                     FSM_TransitionTo(STATE_EXIT_DELAY, now,
-                                     "DISARM -> EXIT_DELAY (valid PIN)");
+                                     "DISARM -> EXIT_DELAY (arm PIN 1234)");
                 }
+            }
+            else if (is_pin_master)
+            {
+                FSM_ClearPin();
+                FSM_SetError("ALREADY DISARMED", 2000U);
+                SD_Log_Event("DISARM: master PIN 6789 ignored (already disarmed)");
             }
             break;
 
         case STATE_EXIT_DELAY:
-            if (is_pin_correct)
+            if (is_pin_master)
             {
                 FSM_TransitionTo(STATE_DISARM, now,
-                                  "EXIT_DELAY -> DISARM (cancelled by PIN)");
+                                  "EXIT_DELAY -> DISARM (cancelled by PIN 6789)");
+            }
+            else if (is_pin_arm)
+            {
+                FSM_ClearPin();
+                FSM_SetError("USE 6789 TO CANCEL", 2000U);
+                SD_Log_Event("EXIT_DELAY: PIN 1234 ignored (already arming)");
             }
             else if (Time_HasElapsed(now, state_start_tick, EXIT_DELAY_MS))
             {
@@ -757,16 +780,6 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
                 entry_trigger = ENTRY_TRIGGER_VIBRATION;
                 FSM_TransitionTo(STATE_ENTRY_DELAY, now,
                                  "ARMED -> ENTRY_DELAY (light vibration)");
-            }
-            else if (is_pin_master)
-            {
-                FSM_TransitionTo(STATE_DISARM, now,
-                                 "ARMED -> DISARM (master PIN 6789)");
-            }
-            else if (is_pin_temp)
-            {
-                FSM_TransitionTo(STATE_DISARM, now,
-                                 "ARMED -> DISARM (temp PIN 1234)");
             }
             break;
 
@@ -830,11 +843,11 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
                 FSM_TransitionTo(STATE_DISARM, now,
                                  "ENTRY_DELAY -> DISARM (master PIN 6789)");
             }
-            else if (is_pin_temp)
+            else if (is_pin_arm)
             {
-                /* 1234#: Tạm giải trừ 60s để bốc dỡ/lấy đồ nhanh rồi tự Re-arm */
+                /* 1234#: Ý định duy trì bảo vệ sau cửa sổ lấy đồ 60s. */
                 FSM_TransitionTo(STATE_TEMP_DISARM, now,
-                                 "ENTRY_DELAY -> TEMP_DISARM (temp PIN 1234)");
+                                 "ENTRY_DELAY -> TEMP_DISARM (arm/rearm PIN 1234)");
             }
             /* PIR ACTIVE và VIB LIGHT chỉ reset cột tương ứng. */
             break;
@@ -863,58 +876,40 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
             break;
 
         case STATE_ALARM_EMERGE:
-            if (!alarm_in_cooldown)
+            if (is_pin_master && !door_open)
             {
-                /* === PHA 1: SIREN (Còi hú cực đại) === */
-                if (is_pin_correct && !door_open)
-                {
-                    /* Cửa ĐÃ ĐÓNG + Đúng PIN -> Chuyển sang Pha 2 Cooldown 30s */
-                    alarm_in_cooldown = true;
-                    alarm_cooldown_start_tick = now;
-                    temp_alarm_output_on = true;
-                    temp_alarm_toggle_tick = now;
-                    FSM_ClearPin();
-                    SD_Log_Event("ALARM_EMERGE: Pha 1 SIREN -> Pha 2 COOLDOWN (door closed + valid PIN)");
-                    printf("[FSM] ALARM_EMERGE: Switched to Phase 2 (Cooldown 30s).\r\n");
-                }
-                else if (is_pin_correct)
-                {
-                    FSM_ClearPin();
-                    FSM_SetError("CLOSE DOOR FIRST", 2000U);
-                    SD_Log_Event("ALARM_EMERGE unlock rejected: door open");
-                }
+                FSM_TransitionTo(STATE_DISARM, now,
+                                 "ALARM_EMERGE -> DISARM (master PIN 6789)");
             }
-            else
+            else if (is_pin_arm && !door_open)
             {
-                /* === PHA 2: COOLDOWN 30s (Hạ nhiệt còi nháy chậm dần) === */
-                if (door_open)
-                {
-                    /* Cửa mở lại -> Leo thang lập tức về Pha 1 Siren */
-                    alarm_in_cooldown = false;
-                    FSM_ClearPin();
-                    SD_Log_Event("ALARM_EMERGE: Pha 2 COOLDOWN -> Pha 1 SIREN (door reopened)");
-                    printf("[FSM] ALARM_EMERGE: Door reopened! Back to Phase 1 Siren!\r\n");
-                }
-                else if (vib_level == VIB_HEAVY)
-                {
-                    /* Rung mạnh đập phá -> Leo thang lập tức về Pha 1 Siren */
-                    alarm_in_cooldown = false;
-                    FSM_ClearPin();
-                    SD_Log_Event("ALARM_EMERGE: Pha 2 COOLDOWN -> Pha 1 SIREN (heavy vibration)");
-                    printf("[FSM] ALARM_EMERGE: Heavy vibration! Back to Phase 1 Siren!\r\n");
-                }
-                else if (Time_HasElapsed(now, alarm_cooldown_start_tick, TEMP_ALARM_MS))
-                {
-                    /* Đủ 30s an toàn (Cửa luôn đóng) -> Tự động chuyển về ARMED (Auto-rearm) */
-                    FSM_TransitionTo(STATE_ARMED, now,
-                                     "ALARM_EMERGE: Pha 2 COOLDOWN 30s -> ARMED (Auto-rearm)");
-                }
-                else if (is_pin_correct)
-                {
-                    /* Nhập đúng PIN trong lúc Cooldown -> Xác nhận an toàn và Re-arm về ARMED */
-                    FSM_TransitionTo(STATE_ARMED, now,
-                                     "ALARM_EMERGE: Pha 2 COOLDOWN -> ARMED (valid PIN verified)");
-                }
+                FSM_TransitionTo(STATE_ALARM_COOLDOWN, now,
+                                 "ALARM_EMERGE -> ALARM_COOLDOWN (arm PIN 1234)");
+            }
+            else if (is_pin_correct)
+            {
+                FSM_ClearPin();
+                FSM_SetError("CLOSE DOOR FIRST", 2000U);
+                SD_Log_Event("ALARM_EMERGE PIN rejected: door open");
+            }
+            break;
+
+        case STATE_ALARM_COOLDOWN:
+            /* COOLDOWN hoàn toàn tự động; không nhận PIN lần hai. */
+            if (door_open)
+            {
+                FSM_TransitionTo(STATE_ALARM_EMERGE, now,
+                                 "ALARM_COOLDOWN -> ALARM_EMERGE (door reopened)");
+            }
+            else if (vib_level == VIB_HEAVY)
+            {
+                FSM_TransitionTo(STATE_ALARM_EMERGE, now,
+                                 "ALARM_COOLDOWN -> ALARM_EMERGE (heavy vibration)");
+            }
+            else if (Time_HasElapsed(now, state_start_tick, ALARM_COOLDOWN_MS))
+            {
+                FSM_TransitionTo(STATE_ARMED, now,
+                                 "ALARM_COOLDOWN -> ARMED (30s safe)");
             }
             break;
 
@@ -924,7 +919,10 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
             break;
     }
 
-    if (pin_submitted && !is_pin_correct)
+    /* Nếu cảm biến/timeout đã chuyển state trong cùng chu kỳ, submission thuộc
+       state cũ phải bị hủy; không để banner/lockout PIN đi theo sang state mới. */
+    bool state_changed = (currentState != state_before_events);
+    if (!state_changed && pin_input_allowed && pin_submitted && !is_pin_correct)
     {
         FSM_HandleWrongPin(now);
     }
