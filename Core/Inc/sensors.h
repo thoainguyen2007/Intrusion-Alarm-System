@@ -8,8 +8,8 @@
  */
 #define CALIBRATION_MODE 0
 
-#define VIB_NOISE_MAX 4 /* <= 4: nhiễu nền, có vùng đệm an toàn */
-#define VIB_LIGHT_MIN 6 /* 6-19: rung nhẹ, cách xa mức nhiễu nền tối thiểu 2 xung */
+#define VIB_NOISE_MAX 5 /* 0-5: nhiễu nền */
+#define VIB_LIGHT_MIN 6 /* 6-19: rung nhẹ */
 #define VIB_HEAVY_MIN 20 /* giữ nguyên, đã hợp lý */
 #define VIB_WINDOW_MS 1000
 #define VIB_GLITCH_FILTER_MS 8 /* đủ lọc dội lò xo cơ khí thật (5-15ms) */

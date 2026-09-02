@@ -84,7 +84,7 @@ void Sensors_Process_Window(bool isDoorClosed)
         }
         else {
             lastVibLevel = VIB_NONE;
-            /* Nếu số xung nhỏ hơn 5 (<= VIB_NOISE_MAX), ta bỏ qua noise */
+            /* 0..VIB_NOISE_MAX được phân loại là nhiễu nền. */
         }
     }
     else
