@@ -6,12 +6,13 @@
 #include <stdio.h>
 #include <string.h>
 
-#define SD_LOG_QUEUE_DEPTH 16U
+#define SD_LOG_QUEUE_DEPTH 32U
 #define SD_LOG_MESSAGE_SIZE 128U
 #define SD_RETRY_INTERVAL_MS 5000U
-#define SD_WRITE_INTERVAL_MS 250U
+#define SD_WRITE_INTERVAL_MS 100U
 
 typedef struct {
+    uint32_t sequence;
     uint32_t tick;
     char message[SD_LOG_MESSAGE_SIZE];
 } SD_LogEntry_t;
@@ -24,6 +25,7 @@ static uint32_t dropped_count;
 static uint32_t reported_dropped_count;
 static uint32_t last_retry_tick;
 static uint32_t last_write_tick;
+static uint32_t next_sequence;
 static bool online;
 
 static void mark_offline(FRESULT reason)
@@ -47,8 +49,8 @@ static FRESULT append_entry(const SD_LogEntry_t *entry, UINT *bytes_written)
     if (result != FR_OK) return result;
 
     char line[160];
-    int length = snprintf(line, sizeof(line), "[%lums] %s\r\n",
-                          entry->tick, entry->message);
+    int length = snprintf(line, sizeof(line), "[#%06lu][%lums] %s\r\n",
+                          entry->sequence, entry->tick, entry->message);
     if (length <= 0 || length >= (int)sizeof(line)) {
         (void)f_close(&file);
         return FR_INVALID_PARAMETER;
@@ -83,6 +85,7 @@ void SD_Logger_ResetSession(bool storage_ready)
     reported_dropped_count = 0U;
     last_retry_tick = HAL_GetTick();
     last_write_tick = HAL_GetTick();
+    next_sequence = 1U;
     online = storage_ready;
 }
 
@@ -94,6 +97,7 @@ bool SD_Logger_Enqueue(const char *message)
         return false;
     }
 
+    queue[head].sequence = next_sequence++;
     queue[head].tick = HAL_GetTick();
     (void)snprintf(queue[head].message, sizeof(queue[head].message), "%s", message);
     head = (uint8_t)((head + 1U) % SD_LOG_QUEUE_DEPTH);
@@ -112,16 +116,14 @@ void SD_Logger_BeginSession(const char *reset_reason)
     (void)SD_Logger_Enqueue("========== NEW BOOT SESSION ==========");
     (void)snprintf(message, sizeof(message), "BOOT reset_cause=%s", reason);
     (void)SD_Logger_Enqueue(message);
-    (void)SD_Logger_Enqueue("FW version=2.1 fsm=6-state log=event-snapshot");
+    (void)SD_Logger_Enqueue("FW version=2.3 fsm=7-state dual-pin log=physical-sync");
 }
 
-void SD_Logger_Process(bool allow_io)
+void SD_Logger_Process(bool allow_write, bool allow_recovery)
 {
-    /* Caller only permits blocking FatFs/SPI work in authenticated safe states. */
-    if (!allow_io) return;
-
     uint32_t now = HAL_GetTick();
     if (!online) {
+        if (!allow_recovery) return;
         if (!Time_HasElapsed(now, last_retry_tick, SD_RETRY_INTERVAL_MS)) return;
 
         last_retry_tick = now;
@@ -139,11 +141,12 @@ void SD_Logger_Process(bool allow_io)
         return;
     }
 
-    if (count == 0U) return;
+    if (!allow_write || count == 0U) return;
     if (!Time_HasElapsed(now, last_write_tick, SD_WRITE_INTERVAL_MS)) return;
     last_write_tick = now;
 
     UINT bytes_written;
+    uint32_t written_sequence = queue[tail].sequence;
     FRESULT result = append_entry(&queue[tail], &bytes_written);
     if (result != FR_OK) {
         mark_offline(result);
@@ -152,8 +155,8 @@ void SD_Logger_Process(bool allow_io)
 
     tail = (uint8_t)((tail + 1U) % SD_LOG_QUEUE_DEPTH);
     --count;
-    printf("[FATFS] Append LOG.TXT: OK (%u bytes), queued=%u\r\n",
-           bytes_written, count);
+    printf("[FATFS] Physical sync LOG.TXT: OK (seq=%lu, %u bytes), queued=%u\r\n",
+           written_sequence, bytes_written, count);
 
     if (dropped_count != reported_dropped_count && count < SD_LOG_QUEUE_DEPTH)
     {
@@ -167,3 +170,4 @@ void SD_Logger_Process(bool allow_io)
 
 bool SD_Logger_IsOnline(void) { return online; }
 uint32_t SD_Logger_GetDroppedCount(void) { return dropped_count; }
+uint8_t SD_Logger_GetQueuedCount(void) { return count; }

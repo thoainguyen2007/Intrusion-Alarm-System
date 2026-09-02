@@ -99,13 +99,13 @@ static uint32_t pir_report_tick = 0;
 char last_key = '-';
 static uint8_t sd_sector_buffer[SD_SPI_BLOCK_SIZE];
 
-/* IWDG: LSI nominal 40 kHz / 256, reload 3124 ~= 20 seconds. This is long
-   enough for a bounded SD recovery attempt but resets a genuinely stuck loop. */
+/* IWDG: LSI nominal 40 kHz / 256, maximum 12-bit reload ~= 26.2 seconds.
+   Actual timeout follows the tolerance of the internal LSI oscillator. */
 static void Watchdog_Init(void)
 {
   IWDG->KR = 0x5555U;
   IWDG->PR = 0x06U;
-  IWDG->RLR = 3124U;
+  IWDG->RLR = 4095U;
   IWDG->KR = 0xAAAAU;
   IWDG->KR = 0xCCCCU;
 }
@@ -292,7 +292,6 @@ int main(void)
   MX_I2C1_Init();
   MX_SPI1_Init();
   MX_TIM1_Init();
-  MX_TIM2_Init();
   MX_USART1_UART_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
@@ -319,20 +318,24 @@ int main(void)
     SSD1306_GotoXY(22U, 26U);
     SSD1306_Puts("SYSTEM READY", &Font_7x10, SSD1306_COLOR_WHITE);
     SSD1306_GotoXY(1U, 44U);
-    SSD1306_Puts("6-STATE FSM ACTIVE", &Font_7x10, SSD1306_COLOR_WHITE);
+    SSD1306_Puts("7-STATE FSM ACTIVE", &Font_7x10, SSD1306_COLOR_WHITE);
     SSD1306_UpdateScreen();
     oled_splash_tick = HAL_GetTick();
   }
 
+  /* Protect SD discovery and all subsequent runtime work. */
+  Watchdog_Init();
+
   /* Log khởi động qua UART1 */
   printf("\r\n========================================\r\n");
   printf("  INTRUSION ALARM SYSTEM - STM32F103\r\n");
-  printf("  Firmware Ver 2.0 (Debounced & Classified)\r\n");
+  printf("  Firmware Ver 2.3 (7-State Dual-PIN + Durable Log)\r\n");
   printf("  PIR Warm-up Time: %d seconds...\r\n", PIR_WARMUP_MS / 1000);
   printf("========================================\r\n");
 
   /* Initialize the card and read sector 0 without modifying it. */
   bool sd_storage_ready = false;
+  Watchdog_Refresh();
   SD_SPI_Result_t sd_result = SD_SPI_InitCard();
   printf("[SD] Init: %s (R1=0x%02X)\r\n",
          SD_SPI_ResultString(sd_result), SD_SPI_GetCardInfo()->last_r1);
@@ -352,6 +355,7 @@ int main(void)
     printf("[SD] Type: %s, OCR=0x%08lX\r\n",
            SD_SPI_CardTypeString(SD_SPI_GetCardInfo()->type),
            SD_SPI_GetCardInfo()->ocr);
+    Watchdog_Refresh();
     sd_result = SD_SPI_ReadBlock(0U, sd_sector_buffer);
     printf("[SD] Read sector 0: %s\r\n", SD_SPI_ResultString(sd_result));
     if (sd_result == SD_SPI_OK)
@@ -362,6 +366,7 @@ int main(void)
              sd_sector_buffer[510], sd_sector_buffer[511]);
     }
 
+    Watchdog_Refresh();
     FRESULT mount_result = f_mount(&USERFatFS, USERPath, 1);
     sd_storage_ready = (mount_result == FR_OK);
     printf("[FATFS] Mount: %s (FR=%u)\r\n",
@@ -371,6 +376,7 @@ int main(void)
     {
       DWORD free_clusters;
       FATFS *mounted_fs;
+      Watchdog_Refresh();
       FRESULT free_result = f_getfree(USERPath, &free_clusters, &mounted_fs);
       if (free_result == FR_OK)
       {
@@ -390,6 +396,9 @@ int main(void)
 
   SD_Logger_Init(sd_storage_ready);
   SD_Logger_BeginSession(reset_cause);
+  (void)SD_Logger_Enqueue(sd_storage_ready
+                          ? "SD_INIT status=ONLINE"
+                          : "SD_INIT status=OFFLINE recovery=pending");
 
   /* OLED was initialized before SD probing so the reset splash is immediate. */
   printf("[OLED] SH1106 1.3in address 0x78: %s\r\n",
@@ -399,14 +408,10 @@ int main(void)
   if (oled_ready && splash_elapsed < 1000U)
     HAL_Delay(1000U - splash_elapsed);
 
-  /* Khởi tạo Máy trạng thái hữu hạn FSM 6 trạng thái phân cấp (Tự động ngắt còi ban đầu) */
+  /* Khởi tạo FSM 7 trạng thái; ALARM và COOLDOWN được tách riêng. */
   FSM_Init();
 
-  /* Bật Timer 2 (MicroSD Timeout / Chống đếm tràn) */
-  HAL_TIM_Base_Start(&htim2);
-
-  /* Start only after all potentially slow boot diagnostics have completed. */
-  Watchdog_Init();
+  Watchdog_Refresh();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -451,7 +456,7 @@ int main(void)
       Sensors_Process_Window(reed_triggered == 0);
     }
 
-    /* --- TÁC VỤ 5: ĐIỀU PHỐI MÁY TRẠNG THÁI FSM 6 TRẠNG THÁI --- */
+    /* --- TÁC VỤ 5: ĐIỀU PHỐI MÁY TRẠNG THÁI FSM 7 TRẠNG THÁI --- */
     /* FSM sẽ tự động quản lý còi Buzzer, LED Heartbeat/Siren, OLED UI và chuyển trạng thái */
     bool is_door_open = (reed_triggered == 1);
     bool is_pir_active = (pir_ready && pir_triggered == 1);
@@ -459,12 +464,13 @@ int main(void)
 
     FSM_Process(key, is_door_open, pir_ready == 1U, is_pir_active, current_vib);
     SystemState_t logger_state = FSM_GetState();
-    /* Mỗi lần chỉ ghi tối đa một record, có rate-limit; tuyệt đối không truy
-       cập FatFs khi canh gác, entry delay hoặc trong cả hai trạng thái còi hú. */
-    /* TEMP_DISARM now verifies door/vibration continuously for 30s, so it is
-       security-critical and must not be delayed by blocking FatFs/SPI I/O. */
-    bool logger_io_allowed = (logger_state == STATE_DISARM);
-    SD_Logger_Process(logger_io_allowed);
+    /* Khi thẻ đang online, ghi tối đa một record mỗi chu kỳ rate-limit và
+       f_sync từng record để sự kiện thực sự tới thẻ. Thử mount lại chỉ trong
+       các state ít nhạy thời gian, tránh lặp thao tác dài lúc báo động. */
+    bool logger_recovery_allowed = (logger_state == STATE_DISARM ||
+                                    logger_state == STATE_EXIT_DELAY ||
+                                    logger_state == STATE_TEMP_DISARM);
+    SD_Logger_Process(true, logger_recovery_allowed);
 
     Watchdog_Refresh();
 

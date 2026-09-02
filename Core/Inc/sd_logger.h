@@ -10,9 +10,11 @@ void SD_Logger_ResetSession(bool storage_ready);
 /* Adds a visible delimiter and reset cause before normal event records. */
 void SD_Logger_BeginSession(const char *reset_reason);
 bool SD_Logger_Enqueue(const char *message);
-/* Performs blocking FatFs work only in an authenticated safe window. */
-void SD_Logger_Process(bool allow_io);
+/* Writes one queued record when allowed. Card re-initialization is separately
+   restricted to safe FSM states because it can take substantially longer. */
+void SD_Logger_Process(bool allow_write, bool allow_recovery);
 bool SD_Logger_IsOnline(void);
 uint32_t SD_Logger_GetDroppedCount(void);
+uint8_t SD_Logger_GetQueuedCount(void);
 
 #endif
