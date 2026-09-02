@@ -2,7 +2,7 @@
 
 ### STM32F103C8T6 (ARM Cortex-M3 @ 72MHz)
 
-Firmware báo động xâm nhập đa cảm biến sử dụng FSM 6 trạng thái phân cấp (Hierarchical FSM), tích hợp KY-003 Mạch Cảm Biến Từ Trường (Hall Sensor), PIR HC-SR501, SW-420, keypad 4x4, OLED SH1106, còi PWM và nhật ký sự
+Firmware báo động xâm nhập đa cảm biến sử dụng FSM 7 trạng thái, tích hợp KY-003 Mạch Cảm Biến Từ Trường (Hall Sensor), PIR HC-SR501, SW-420, keypad 4x4, OLED SH1106, còi PWM và nhật ký sự
 kiện MicroSD có khả năng phục hồi sau khi tháo/lỗi thẻ.
 
 > **Trạng thái dự án:** Nhánh `main` build thành công bằng CMake + Ninja + GNU
@@ -25,7 +25,7 @@ kiện MicroSD có khả năng phục hồi sau khi tháo/lỗi thẻ.
 
 1. [Tổng Quan Dự Án](#1-tổng-quan-dự-án)
 2. [Sơ Đồ Kết Nối Phần Cứng &amp; Pinout STM32](#2-sơ-đồ-kết-nối-phần-cứng--pinout-stm32)
-3. [Thiết Kế Máy Trạng Thái Hữu Hạn (6-State Hierarchical FSM)](#3-thiết-kế-máy-trạng-thái-hữu-hạn-6-state-hierarchical-fsm)
+3. [Thiết Kế Máy Trạng Thái Hữu Hạn (7-State FSM)](#3-thiết-kế-máy-trạng-thái-hữu-hạn-7-state-fsm)
 4. [Kịch Bản Kiểm Thử Hoạt Động (Test Cases TC01 - TC13)](#4-kịch-bản-kiểm-thử-hoạt-động-test-cases-tc01---tc13)
 5. [Thuật Toán Xử Lý Tín Hiệu &amp; Hiệu Chuẩn Cảm Biến](#5-thuật-toán-xử-lý-tín-hiệu--hiệu-chuẩn-cảm-biến)
 6. [Cấu Trúc Thư Mục Dự Án](#6-cấu-trúc-thư-mục-dự-án)
@@ -52,13 +52,18 @@ các trạng thái bảo vệ, dùng watchdog để phục hồi vòng điều k
 thị toàn bộ quá trình xác minh/báo động trên OLED 128x64. `ENTRY_DELAY` có timeout
 tối đa 30 giây; cảnh báo sớm tự hủy khi PIR duy trì `READY` liên tục đủ 10 giây và cảm biến rung duy trì yên tĩnh đủ 5 giây, còn khi có chấn động rung hoặc cửa mở hệ thống sẽ phản ứng tức thì theo phân cấp an ninh.
 
-Nhật ký SD dùng hàng đợi RAM 16 sự kiện: FSM chỉ enqueue, không gọi FatFs/SPI khi
-đang `EXIT_DELAY`, `ARMED`, `ENTRY_DELAY` hoặc còi hú `ALARM_EMERGE`.
-`sd_logger.c` chỉ ghi và `f_sync` trong cửa sổ an toàn `DISARM`, tối đa một bản
-ghi mỗi 250 ms. `TEMP_DISARM` cũng chỉ enqueue vào RAM, không truy cập thẻ để đảm bảo tính thời gian thực và không gây trễ vòng quét. Vì vậy FatFs không làm trễ các trạng thái canh gác,
-xác minh hoặc còi hú. Khi I/O lỗi,
-sự kiện chưa ghi được giữ lại, thẻ được đánh dấu offline và chỉ thử khởi tạo/mount
-lại mỗi 5 giây trong trạng thái an toàn; nếu queue đầy, bộ đếm `dropped_count` và
+Nhật ký SD dùng hàng đợi RAM 32 sự kiện. Mỗi record có số thứ tự tăng dần trong
+phiên, timestamp `HAL_GetTick()` và snapshot cảm biến. Khi thẻ đang online,
+logger ghi tối đa một record mỗi 100 ms bằng chuỗi `open → seek cuối file → write
+→ f_sync → close`; chỉ khi `f_sync` thành công record mới được lấy khỏi queue.
+Như vậy mọi chuyển trạng thái, kể cả `ALARM_EMERGE` và `ALARM_COOLDOWN`, đều được
+đẩy xuống vật lý thay vì chờ hệ thống quay lại `DISARM`.
+
+FatFs/SPI là giao tiếp đồng bộ nên một lần ghi vẫn có thể tạm dừng vòng lặp. Để
+giới hạn ảnh hưởng khi tháo/lỗi thẻ, lần I/O hỏng đánh dấu logger offline ngay;
+việc khởi tạo và mount lại mỗi 5 giây chỉ được phép trong `DISARM`, `EXIT_DELAY`
+hoặc `TEMP_DISARM`, không lặp recovery trong `ENTRY_DELAY`, `ARMED`, báo động hay
+cooldown. Sự kiện chưa ghi vẫn nằm trong queue; nếu queue đầy, `dropped_count` và
 UART cho biết số sự kiện bị bỏ. Mỗi lần firmware khởi động, toàn bộ queue RAM,
 chỉ số `head/tail/count` và `dropped_count` đều được xóa; logger không cấp phát heap.
 File `LOG.TXT` không bị xóa: phiên mới được phân cách bằng `NEW BOOT SESSION` và
@@ -69,9 +74,11 @@ Mọi chuyển trạng thái ghi kèm một snapshot nhất quán: `D` (cửa), 
 UART để tránh làm đầy file và tăng số lần ghi thẻ. Logger cũng ghi sự kiện thẻ
 offline/online và tổng số record đã phải bỏ khi queue từng bị đầy.
 
-Independent watchdog dùng LSI với timeout danh định khoảng 20 giây và được feed
-ở cuối vòng lặp. UART có timeout truyền hữu hạn, OLED được giới hạn 2 FPS để giảm
-blocking; watchdog sẽ reset MCU nếu một ngoại vi vẫn làm vòng điều khiển treo lâu.
+Independent watchdog dùng LSI, prescaler 256 và reload 4095, cho timeout danh định
+khoảng 26,2 giây (thực tế phụ thuộc sai số LSI). Watchdog được bật trước khi dò
+thẻ SD, được refresh trước các thao tác SD khởi động có giới hạn và ở cuối mỗi
+vòng lặp. UART có timeout hữu hạn, OLED giới hạn 2 FPS; MCU sẽ reset nếu ngoại vi
+làm vòng điều khiển treo quá lâu.
 
 ---
 
@@ -113,16 +120,16 @@ Module KY-003 Mạch Cảm Biến Từ Trường gồm 3 chân kết nối: châ
 
 PA8 phát PWM 2 kHz, duty xấp xỉ 50% cho passive buzzer nhỏ hoặc tầng driver.
 Keypad dùng beep 40 ms không blocking; beep bị vô hiệu trong `ENTRY_DELAY` và
-`ALARM_EMERGE` (Pha 1 Siren) để không can thiệp nhịp cảnh báo/còi hú. LED PC13
+`ALARM_EMERGE` để không can thiệp nhịp cảnh báo/còi hú. LED PC13
 active-low được điều khiển theo pha thời gian của từng state; `TEMP_DISARM` dùng
-hai chớp ngắn mỗi giây. `ALARM_EMERGE` (Pha 1) giữ còi liên tục, còn Pha 2 Cooldown đồng bộ
+hai chớp ngắn mỗi giây. `ALARM_EMERGE` giữ còi liên tục, còn `ALARM_COOLDOWN` đồng bộ
 LED và buzzer theo nhịp giảm dần trong 30 giây.
 
 ---
 
-## 3. THIẾT KẾ MÁY TRẠNG THÁI HỮU HẠN (6-STATE HIERARCHICAL FSM)
+## 3. THIẾT KẾ MÁY TRẠNG THÁI HỮU HẠN (7-STATE FSM)
 
-Hệ thống hoạt động dựa trên máy trạng thái hữu hạn phân cấp gồm 6 trạng thái cốt lõi với hệ thống phân quyền **Dual-PIN (Mã PIN Kép: 1234 / 6789)**. `STATE_ALARM_EMERGE` được thiết kế dưới dạng trạng thái phân cấp (Hierarchical State) tích hợp 2 Pha xử lý liên hoàn (Siren hú cực đại $\rightarrow$ Cooldown hạ nhiệt 30s $\rightarrow$ Tự động về `ARMED`):
+Hệ thống gồm 7 trạng thái tách bạch và hai mã thể hiện trực tiếp ý định: `1234` là **ARM/RE-ARM**, còn `6789` là **MASTER DISARM**. Bàn phím chỉ được xử lý tại `DISARM`, `EXIT_DELAY`, `ENTRY_DELAY` và `ALARM_EMERGE`.
 
 ```mermaid
 flowchart TD
@@ -133,42 +140,46 @@ flowchart TD
     ARMED["<b>ARMED</b><br><i>(Vũ trang / Giám sát)</i>"]
     ENTRY_DELAY["<b>ENTRY_DELAY</b><br><i>(Cảnh báo sớm 30s)</i>"]
     TEMP_DISARM["<b>TEMP_DISARM</b><br><i>(Lấy đồ nhanh 60s)</i>"]
-    ALARM_EMERGE["<b>ALARM_EMERGE</b><br><i>(Báo động khẩn & Cooldown 30s)</i>"]
+    ALARM_EMERGE["<b>ALARM_EMERGE</b><br><i>(Báo động khẩn)</i>"]
+    ALARM_COOLDOWN["<b>ALARM_COOLDOWN</b><br><i>(Xác minh an toàn 30s)</i>"]
 
-    DISARM -- "Nhập PIN đúng (Cửa đóng)" --> EXIT_DELAY
-    EXIT_DELAY -- "Nhập PIN hủy / Hết 15s (Cửa vẫn mở - Arm Failed)" --> DISARM
+    DISARM -- "1234, cửa đóng" --> EXIT_DELAY
+    DISARM -- "6789: Already disarmed" --> DISARM
+    EXIT_DELAY -- "6789: Hủy lệnh / Hết 15s cửa mở" --> DISARM
     EXIT_DELAY -- "Hết 15s (Cửa đóng)" --> ARMED
 
-    ARMED -- "Nhập PIN đúng" --> DISARM
     ARMED -- "PIR phát hiện / Rung nhẹ" --> ENTRY_DELAY
     ARMED -- "Cửa mở / Rung mạnh" --> ALARM_EMERGE
 
     ENTRY_DELAY -- "Nhập PIN Master 6789 (Về nhà ở luôn)" --> DISARM
-    ENTRY_DELAY -- "Nhập PIN Temp 1234 (Lấy đồ nhanh 60s)" --> TEMP_DISARM
+    ENTRY_DELAY -- "1234: ARM/RE-ARM qua cửa sổ 60s" --> TEMP_DISARM
     ENTRY_DELAY -- "Auto-rearm (PIR READY 10s & Rung yên 5s)" --> ARMED
     ENTRY_DELAY -- "Cửa mở / Rung mạnh / Hết 30s" --> ALARM_EMERGE
 
     TEMP_DISARM -- "Hết 60s (Cửa đã đóng - Auto-rearm)" --> ARMED
     TEMP_DISARM -- "Hết 60s mà cửa vẫn mở" --> ALARM_EMERGE
 
-    ALARM_EMERGE -- "Đủ 30s Cooldown an toàn / Nhập đúng PIN (Auto-rearm)" --> ARMED
+    ALARM_EMERGE -- "1234, cửa đóng" --> ALARM_COOLDOWN
+    ALARM_EMERGE -- "6789, cửa đóng" --> DISARM
+    ALARM_COOLDOWN -- "Đủ 30s an toàn" --> ARMED
+    ALARM_COOLDOWN -- "Cửa mở / Rung mạnh" --> ALARM_EMERGE
 ```
 
 ### Chi tiết các trạng thái & Cơ chế Dual-PIN:
 
-* 🔑 **Mã `6789` — MASTER PIN (Giải trừ an ninh hoàn toàn):** Sử dụng khi chủ nhà về nhà nghỉ ngơi (từ `ENTRY_DELAY` chuyển thẳng về `DISARM`).
-* ⏱️ **Mã `1234` — TEMP PIN (Tạm giải trừ 60s lấy đồ nhanh):** Sử dụng khi người dùng chỉ ghé lấy đồ rồi đi ngay (từ `ENTRY_DELAY` chuyển sang `TEMP_DISARM` 60s rồi tự Re-arm về `ARMED`).
+* 🔒 **Mã `1234` — ARM/RE-ARM:** Bắt đầu ARM từ `DISARM`; khi đang xác minh hoặc báo động, mã này chọn đích cuối là `ARMED` thông qua `TEMP_DISARM` hoặc `ALARM_COOLDOWN`.
+* 🔑 **Mã `6789` — MASTER DISARM:** Hủy `EXIT_DELAY` hoặc đưa hệ thống về `DISARM` từ `ENTRY_DELAY`/`ALARM_EMERGE` sau khi thỏa điều kiện cửa.
 
-1. **`DISARM` (Giải trừ / Chờ):** Hệ thống không kích hoạt báo động. Cho phép người dùng nhập mã PIN (`1234#` hoặc `6789#`) để kích hoạt chế độ bảo vệ. Nếu cửa đang mở, hệ thống từ chối kích hoạt và hiển thị lỗi `ARM FAILED: Door Open!`.
+1. **`DISARM` (Giải trừ / Chờ):** Chỉ `1234#` với cửa đóng mới bắt đầu ARM. `6789#` hiển thị `ALREADY DISARMED`, không bị tính là PIN sai.
 2. **`EXIT DELAY` (Đếm ngược rời nhà - 15s):** Màn hình đếm lùi 15s, còi bíp nhịp chậm nhắc nhở (100ms ON / 900ms OFF), LED nháy 1Hz. Người dùng có đủ thời gian bước ra ngoài và đóng cửa:
-   * **Nhập PIN can thiệp:** Nhập đúng mã PIN bất kỳ lúc nào để hủy đếm lùi $\rightarrow$ Quay về `DISARM`.
+   * **Nhập `6789#`:** Hủy đếm lùi và quay về `DISARM`. `1234#` chỉ báo hệ thống đang thực hiện lệnh ARM.
    * **Hết 15s và Cửa ĐÃ ĐÓNG:** Hệ thống kích hoạt bảo vệ thành công $\rightarrow$ Chuyển sang **`ARMED`**.
    * **Hết 15s mà Cửa VẪN MỞ (quên đóng cửa):** Kích hoạt thất bại $\rightarrow$ Tự động chuyển về **`DISARM`** và hiển thị thông báo lỗi `ARM FAILED: Door Open!` (2.5s).
    * Trong suốt 15s đếm lùi `EXIT DELAY`, các tín hiệu PIR và rung được bỏ qua, người dùng mở cửa đi ra ngoài là hành vi hợp lệ.
 3. **`ARMED` (Vũ trang / Giám sát toàn diện):** Hệ thống giám sát chặt chẽ:
    * Nếu PIR phát hiện chuyển động hoặc có rung nhẹ $\rightarrow$ Chuyển sang `ENTRY DELAY` để xác thực PIN trước khi báo động.
    * Nếu cửa mở hoặc có rung mạnh ($\ge 20$ xung) $\rightarrow$ Nhảy thẳng sang `ALARM EMERGE`.
-   * Nhập đúng mã PIN $\rightarrow$ Giải trừ an ninh về `DISARM`.
+   * Bàn phím bị bỏ qua hoàn toàn; muốn xác thực phải đi qua một sự kiện an ninh.
 4. **`ENTRY DELAY` (Cảnh báo sớm - tối đa 30s):** PIR và rung nhẹ là hai cột xác minh độc lập. PIR phải duy trì `READY` liên tục 10s; rung phải không còn mức `LIGHT` liên tục 5s $\rightarrow$ Tự trở về `ARMED`. Cửa mở/rung mạnh chuyển ngay sang `ALARM EMERGE`.
    * **Nhập PIN `6789#` (Master):** Chuyển ngay về **`DISARM`** (về nhà ở luôn).
    * **Nhập PIN `1234#` (Temp):** Chuyển sang **`TEMP DISARM`** (60s lấy đồ nhanh).
@@ -178,9 +189,8 @@ flowchart TD
    * **Chốt tự động ($t \ge 60\text{s}$):**
      * Nếu cửa **ĐÃ ĐÓNG** $\rightarrow$ Tự động chuyển về **`ARMED`** (Auto-rearm tiếp tục bảo vệ).
      * Nếu cửa **VẪN MỞ** $\rightarrow$ Kích hoạt còi hú **`ALARM EMERGE`** (quên đóng cửa khi đi ra ngoài).
-6. **`ALARM EMERGE` (Báo động khẩn cấp & Cooldown 30s):** Trạng thái phân cấp gồm 2 Pha xử lý liên hoàn:
-   * **Pha 1 (Còi hú khẩn cấp - Siren):** Còi PWM 2kHz hú liên tục, LED nháy 10Hz. Chỉ khi cửa đã ĐÓNG và nhập đúng PIN thì hệ thống mới chuyển sang Pha 2; nếu cửa đang mở mà nhập PIN sẽ bị từ chối và báo `CLOSE DOOR FIRST`.
-   * **Pha 2 (Hạ nhiệt / Cooldown 30s):** LED và buzzer nháy/hú chậm dần đồng bộ trong 30s (125ms $\to$ 750ms). Nếu cửa mở lại hoặc rung mạnh $\rightarrow$ Lập tức quay lại Pha 1 hú còi cực đại; nếu đủ 30s an toàn với cửa luôn đóng hoặc người dùng nhập đúng PIN xác minh an toàn $\rightarrow$ Hệ thống tự động tái vũ trang về **`ARMED`** (Auto-rearm an ninh).
+6. **`ALARM EMERGE`:** Còi PWM hú liên tục và LED nháy nhanh. Khi cửa đóng, `1234#` chuyển sang `ALARM_COOLDOWN`; `6789#` giải trừ thẳng về `DISARM`. Khi cửa mở, cả hai mã đều bị từ chối.
+7. **`ALARM COOLDOWN`:** Không nhận bàn phím. LED và buzzer chậm dần trong 30s. Cửa mở lại hoặc rung mạnh đưa hệ thống về `ALARM_EMERGE`; đủ 30s an toàn tự chuyển về `ARMED`.
 
 ### 3.2. Bảng Chân Trị Hợp Nhất 8 Tổ Hợp Cảm Biến Nhị Phân (Truth Table 2³ = 8)
 
@@ -204,15 +214,15 @@ Bảng chân trị chuẩn mô tả phản ứng của hệ thống đối với
 
 #### Bảng Phản Ứng Tương Tác Bàn Phím (Mã PIN) & Timeout:
 
-| Trạng Thái Hiện Tại                     | Nhập Đúng PIN Temp (`1234#`)                                                                                 | Nhập Đúng PIN Master (`6789#`)                                                                               | Khi Hết Thời Gian Timeout                                                            | Nhập Sai PIN     | Sau 5 Lần Nhập Sai                  |
+| Trạng Thái Hiện Tại                     | PIN ARM/RE-ARM (`1234#`)                                                                                     | PIN MASTER DISARM (`6789#`)                                                                                  | Khi Hết Thời Gian Timeout                                                            | Nhập Sai PIN     | Sau 5 Lần Nhập Sai                  |
 | :------------------------------------------ | :----------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------- | :---------------- | :------------------------------------ |
-| **`DISARM`**                        | Cửa đóng $\to$ Sang `EXIT_DELAY` (15s)<br>Cửa mở $\to$ Từ chối ARM                                           | Cửa đóng $\to$ Sang `EXIT_DELAY` (15s)<br>Cửa mở $\to$ Từ chối ARM                                           | Không áp dụng (ở chế độ chờ)                                                         | Báo `WRONG PIN` | Khóa phím 30 giây (`PIN LOCKED`) |
-| **`EXIT_DELAY`**                    | Hủy đếm lùi $\to$ Quay về `DISARM`                                                                           | Hủy đếm lùi $\to$ Quay về `DISARM`                                                                           | Hết 15s & Cửa đóng $\to$ Sang `ARMED`<br>Hết 15s & Cửa mở $\to$ Quay về `DISARM` (Lỗi) | Báo `WRONG PIN` | Khóa phím 30 giây                  |
-| **`ARMED`**                         | Chuyển về `DISARM`                                                                                           | Chuyển về `DISARM` (Master)                                                                                  | Không áp dụng (giám sát liên tục)                                                    | Báo `WRONG PIN` | Khóa phím 30 giây                  |
-| **`ENTRY_DELAY`**                   | Cửa đóng $\to$ Sang **`TEMP_DISARM` (60s)**                                                                  | Chuyển ngay về **`DISARM`** (Về nhà ở luôn)                                                                  | Hết 30s $\to$ Kích hoạt `ALARM_EMERGE` (Pha 1 Siren)                                  | Báo `WRONG PIN` | Khóa phím 30 giây                  |
+| **`DISARM`**                        | Cửa đóng $\to$ `EXIT_DELAY`<br>Cửa mở $\to$ Từ chối ARM                                                    | Hiển thị `ALREADY DISARMED`, giữ nguyên state                                                                 | Không áp dụng                                                                         | Báo `WRONG PIN` | Khóa phím 30 giây (`PIN LOCKED`) |
+| **`EXIT_DELAY`**                    | Báo `USE 6789 TO CANCEL`, tiếp tục đếm                                                                        | Hủy đếm lùi $\to$ `DISARM`                                                                                   | Cửa đóng $\to$ `ARMED`<br>Cửa mở $\to$ `DISARM`                                    | Báo `WRONG PIN` | Khóa phím 30 giây                  |
+| **`ARMED`**                         | Bỏ qua bàn phím                                                                                               | Bỏ qua bàn phím                                                                                               | Không áp dụng                                                                         | Không áp dụng    | Không áp dụng                      |
+| **`ENTRY_DELAY`**                   | Cửa đóng $\to$ Sang **`TEMP_DISARM` (60s)**                                                                  | Chuyển ngay về **`DISARM`** (Về nhà ở luôn)                                                                  | Hết 30s $\to$ Kích hoạt `ALARM_EMERGE`                                                | Báo `WRONG PIN` | Khóa phím 30 giây                  |
 | **`TEMP_DISARM`**                   | Bỏ qua bàn phím (Tự động 100%)                                                                               | Bỏ qua bàn phím (Tự động 100%)                                                                               | Hết 60s & Cửa đóng $\to$ Về **`ARMED`**<br>Hết 60s & Cửa mở $\to$ Hú `ALARM_EMERGE`   | Không áp dụng     | Không áp dụng                         |
-| **`ALARM_EMERGE (Pha 1 Siren)`**    | Cửa đóng $\to$ Chuyển sang Pha 2 Cooldown (30s)<br>Cửa mở $\to$ Từ chối giải trừ (`CLOSE DOOR FIRST`)       | Cửa đóng $\to$ Chuyển sang Pha 2 Cooldown (30s)<br>Cửa mở $\to$ Từ chối giải trừ (`CLOSE DOOR FIRST`)       | Không timeout (hú còi liên tục cho đến khi xác minh)                                 | Báo `WRONG PIN` | Khóa phím 30 giây (`PIN LOCKED`) |
-| **`ALARM_EMERGE (Pha 2 Cooldown)`** | Tái vũ trang an ninh về **`ARMED`**                                                                          | Tái vũ trang an ninh về **`ARMED`**                                                                          | Hết 30s an toàn (cửa luôn đóng) $\to$ Tự động về **`ARMED`** (Auto-rearm)            | Báo `WRONG PIN` | Khóa phím 30 giây                  |
+| **`ALARM_EMERGE`**                  | Cửa đóng $\to$ `ALARM_COOLDOWN`<br>Cửa mở $\to$ Từ chối (`CLOSE DOOR FIRST`)                               | Cửa đóng $\to$ `DISARM`<br>Cửa mở $\to$ Từ chối (`CLOSE DOOR FIRST`)                                       | Không timeout; hú còi đến khi xác thực                                                | Báo `WRONG PIN` | Khóa phím 30 giây (`PIN LOCKED`) |
+| **`ALARM_COOLDOWN`**                | Bỏ qua bàn phím                                                                                               | Bỏ qua bàn phím                                                                                               | Hết 30s an toàn $\to$ `ARMED`; cửa mở/rung mạnh $\to$ `ALARM_EMERGE`                | Không áp dụng    | Không áp dụng                      |
 
 ---
 
@@ -222,7 +232,7 @@ Bảng chân trị chuẩn mô tả phản ứng của hệ thống đối với
 | :--------------------------- | :-------: | :-------: | :------------------------------------------------------------------------------------------------------------- |
 | `REED_DEBOUNCE_MS`         |  `50`  |    ms    | Thời gian xác nhận tín hiệu cảm biến từ trường KY-003 ổn định sau ngắt `EXTI0`.                              |
 | `VIB_GLITCH_FILTER_MS`     |   `8`   |    ms    | Bộ lọc chống dội lò xo cơ học ngắt `EXTI2` của module rung SW-420.                                           |
-| `VIB_WINDOW_MS`            | `1000` |    ms    | Cửa sổ trượt tích lũy xung rung (0-4: `NONE`, 6-19: `LIGHT`, $\ge 20$: `HEAVY`).                             |
+| `VIB_WINDOW_MS`            | `1000` |    ms    | Cửa sổ tích lũy xung rung (0-5: `NONE`, 6-19: `LIGHT`, $\ge 20$: `HEAVY`).                                   |
 | `PIR_WARMUP_MS`            | `30000` |    ms    | Thời gian làm ấm mắt cảm biến PIR HC-SR501 sau khi cấp nguồn (30 giây).                                       |
 | `PIR_STABLE_MS`            | `1400` |    ms    | Mức OUT của PIR phải giữ liên tục $\ge 1.4\text{s}$ mới xác nhận chuyển động thật.                          |
 | `PIR_BLOCKING_MS`          | `1000` |    ms    | Thời gian giữ ON trong phần mềm sau khi OUT hạ LOW trước khi công bố READY (1.0 giây).                        |
@@ -232,7 +242,7 @@ Bảng chân trị chuẩn mô tả phản ứng của hệ thống đối với
 | `ENTRY_VIB_QUIET_REARM_MS` | `5000` |    ms    | Thời gian rung phải duy trì NONE liên tục để tự hủy cảnh báo giả (5 giây).                                    |
 | `TEMP_DISARM_MS`           | `60000` |    ms    | Cửa sổ lấy đồ nhanh và tự động Re-arm về `ARMED` khi đóng cửa (60 giây).                                      |
 | `TEMP_DISARM_WARN_MS`      | `45000` |    ms    | Mốc kích hoạt cảnh báo bíp tăng dần ($500\text{ms} \to 250\text{ms} \to 100\text{ms}$) ở 15s cuối.          |
-| `TEMP_ALARM_MS`            | `30000` |    ms    | Thời gian Pha 2 Cooldown hạ nhiệt đồng bộ còi & LED trong `ALARM_EMERGE` (30 giây).                           |
+| `ALARM_COOLDOWN_MS`        | `30000` |    ms    | Thời gian xác minh an toàn độc lập trong `ALARM_COOLDOWN` (30 giây).                                          |
 | `PIN_LOCKOUT_MS`           | `30000` |    ms    | Thời gian vô hiệu hóa bàn phím sau 5 lần nhập sai mã PIN liên tiếp (30 giây).                                  |
 
 ---
@@ -241,20 +251,21 @@ Bảng chân trị chuẩn mô tả phản ứng của hệ thống đối với
 
 | Mã Test       | Trạng Thái Bắt Đầu        | Sự Kiện Kích Hoạt                                                     | Kết Quả Mong Đợi / Chuyển Trạng Thái                                                                                                                                                                                                                                                                                                                           |
 | :------------- | :----------------------------- | :------------------------------------------------------------------------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **TC01** | `DISARM`                     | Nhập đúng mã PIN khi cửa đóng                                      | Vào `EXIT DELAY` (15s) $\rightarrow$ Hết 15s & Cửa đóng $\rightarrow$ Chuyển sang **`ARMED`**.                                                                                                                                                                                                                                                     |
-| **TC02** | `DISARM`                     | Nhập đúng mã PIN nhưng cửa mở                                      | Từ chối kích hoạt, giữ **`DISARM`** và OLED báo lỗi `ARM FAILED: Door Open!`.                                                                                                                                                                                                                                                                         |
-| **TC03** | `EXIT DELAY`                 | Nhập mã PIN giải trừ (`1234#` hoặc `6789#`)                              | Hủy ngay chu trình đếm lùi $\rightarrow$ Trở về **`DISARM`**.                                                                                                                                                                                                                                                                                         |
+| **TC01** | `DISARM`                     | Nhập `1234#` khi cửa đóng                                          | Vào `EXIT DELAY` (15s) $\rightarrow$ Hết 15s & Cửa đóng $\rightarrow$ Chuyển sang **`ARMED`**.                                                                                                                                                                                                                                                     |
+| **TC02** | `DISARM`                     | Nhập `1234#` khi cửa mở / nhập `6789#`                             | Cửa mở: từ chối ARM. `6789#`: giữ **`DISARM`** và báo `ALREADY DISARMED`.                                                                                                                                                                                                                                                                              |
+| **TC03** | `EXIT DELAY`                 | Nhập `6789#` / nhập `1234#`                                             | `6789#` hủy ngay về **`DISARM`**; `1234#` chỉ báo `USE 6789 TO CANCEL` và tiếp tục đếm.                                                                                                                                                                                                                                                                 |
 | **TC03b** | `EXIT DELAY`                 | Hết 15s mà cửa vẫn còn mở (quên đóng cửa)                                 | Hủy kích hoạt bảo vệ $\rightarrow$ Báo lỗi `ARM FAILED: Door Open!` và tự trở về **`DISARM`**.                                                                                                                                                                                                                                                      |
 | **TC04** | `ARMED`                      | PIR hoặc rung nhẹ                                                       | Chuyển sang **`ENTRY_DELAY`** 30s. Cửa mở hoặc rung mạnh chuyển ngay sang `ALARM_EMERGE`.                                                                                                                                                                                                                                                                    |
 | **TC05a** | `ENTRY DELAY`                | Nhập mã Temp PIN **`1234#`** trước 30s                                  | Chuyển sang **`TEMP DISARM`** (60s) để lấy đồ nhanh.                                                                                                                                                                                                                                                                                                 |
 | **TC05b** | `ENTRY DELAY`                | Nhập mã Master PIN **`6789#`** trước 30s                                | Giải trừ an ninh hoàn toàn $\rightarrow$ Chuyển về **`DISARM`**.                                                                                                                                                                                                                                                                                      |
-| **TC06** | `ENTRY DELAY`                | Hết 30s mà chưa nhập đúng PIN                                       | Kích hoạt tức thì **`ALARM EMERGE`** (Pha 1 Siren); còi hú và sự kiện được enqueue để ghi SD ở cửa sổ I/O an toàn tiếp theo.                                                                                                                                                                                                                        |
-| **TC07** | `ENTRY DELAY`                | Cửa mở hoặc rung mạnh                                                  | Chuyển thẳng sang **`ALARM EMERGE`** (Pha 1 Siren) ngay lập tức.                                                                                                                                                                                                                                                                                      |
+| **TC06** | `ENTRY DELAY`                | Hết 30s mà chưa nhập đúng PIN                                       | Kích hoạt tức thì **`ALARM EMERGE`**; sự kiện được enqueue và, nếu thẻ đang online, ghi vật lý bằng `f_sync`.                                                                                                                                                                                                                                         |
+| **TC07** | `ENTRY DELAY`                | Cửa mở hoặc rung mạnh                                                  | Chuyển thẳng sang **`ALARM EMERGE`** ngay lập tức.                                                                                                                                                                                                                                                                                                    |
 | **TC08** | `TEMP DISARM`                | Hết 60s và Cửa đã đóng                                             | Tự động kích hoạt lại an ninh về **`ARMED`** (Auto-rearm).                                                                                                                                                                                                                                                                                             |
-| **TC09** | `TEMP DISARM`                | Hết 60s mà Cửa vẫn còn mở (quên đóng cửa)                       | Kích hoạt tức thì **`ALARM EMERGE`** (Pha 1 Siren hú còi báo động quên đóng cửa).                                                                                                                                                                                                                                                                     |
-| **TC10** | `ALARM EMERGE` (Pha 1 Siren) | Đóng cửa rồi nhập đúng PIN xác minh                               | Chuyển sang **Pha 2 Cooldown (30s)**: Còi và LED nháy chậm dần từ 125ms lên 750ms. Nếu mở cửa lại hoặc rung mạnh $\rightarrow$ Lập tức quay lại Pha 1 Siren hú cực đại; nếu đủ 30s an toàn với cửa đóng hoặc nhập PIN xác nhận $\rightarrow$ Tự động tái vũ trang về **`ARMED`** (Auto-rearm).                                                  |
+| **TC09** | `TEMP DISARM`                | Hết 60s mà Cửa vẫn còn mở (quên đóng cửa)                       | Kích hoạt tức thì **`ALARM EMERGE`**, còi hú báo quên đóng cửa.                                                                                                                                                                                                                                                                                        |
+| **TC10** | `ALARM EMERGE`                | Đóng cửa rồi nhập `1234#` / `6789#`                               | `1234#` $\rightarrow$ **`ALARM_COOLDOWN`**; `6789#` $\rightarrow$ **`DISARM`**. Cửa mở thì cả hai mã đều bị từ chối.                                                                                                                                                                                                                                  |
+| **TC10b** | `ALARM_COOLDOWN`             | Chờ đủ 30s / mở cửa hoặc rung mạnh                                | Đủ 30s an toàn $\rightarrow$ **`ARMED`**; cửa mở hoặc rung mạnh $\rightarrow$ **`ALARM_EMERGE`**. Bàn phím bị bỏ qua.                                                                                                                                                                                                                                  |
 | **TC11** | `ENTRY DELAY`                | PIR `READY` liên tục 10s và rung yên liên tục 5s, cửa vẫn đóng | Hủy cảnh báo giả và tự trở lại **`ARMED`**. PIR hoặc rung nhẹ tái xuất hiện chỉ reset bộ đếm của cột tương ứng.                                                                                                                                                                                                                                |
-| **TC12** | Mọi trạng thái               | Nhập sai mã PIN 5 lần liên tiếp                                           | Khóa bàn phím 30 giây (`PIN LOCKED 30s`), OLED hiển thị thông báo khóa, các cảm biến và timeout vẫn hoạt động bình thường.                                                                                                                                                                                                                           |
+| **TC12** | State có nhận PIN            | Nhập sai mã PIN 5 lần liên tiếp                                          | Khóa bàn phím 30 giây (`PIN LOCKED 30s`); cảm biến và timeout vẫn hoạt động. Phím trong `ARMED`, `TEMP_DISARM`, `ALARM_COOLDOWN` bị bỏ qua và không tăng bộ đếm.                                                                                                                                                                                        |
 
 ---
 
@@ -264,7 +275,7 @@ Bảng chân trị chuẩn mô tả phản ứng của hệ thống đối với
 
 * **Bộ lọc chống dội cơ khí (Glitch Filter):** Ngắt `EXTI2` áp dụng bộ lọc $8\text{ms}$ (`VIB_GLITCH_FILTER_MS = 8`) để loại bỏ hoàn toàn hiện tượng rung lò xo nội tại.
 * **Cửa sổ trượt thời gian 1.0 giây (`VIB_WINDOW_MS = 1000`):** Đếm tổng số xung tích lũy trong 1 giây để phân loại:
-  * **$0 - 4$ xung:** Nhiễu nền môi trường $\rightarrow$ Bỏ qua (`VIB_NONE`).
+  * **$0 - 5$ xung:** Nhiễu nền môi trường $\rightarrow$ Bỏ qua (`VIB_NONE`).
   * **$6 - 19$ xung:** Rung nhẹ do va quẹt, gõ cửa $\rightarrow$ **`VIB_LIGHT`**.
   * **$\ge 20$ xung:** Chấn động đập phá, dùng búa/xà beng cạy cửa $\rightarrow$ **`VIB_HEAVY`**.
 * **Quy trình Hiệu chuẩn (Calibration):**
@@ -414,7 +425,7 @@ Lệnh build chỉ tạo firmware; thao tác flash luôn cần chọn đúng pro
    ```text
    ========================================
      INTRUSION ALARM SYSTEM - STM32F103
-     Firmware Ver 2.0 (Debounced & Classified)
+     Firmware Ver 2.3 (7-State Dual-PIN + Durable Log)
      PIR Warm-up Time: 30 seconds...
    ========================================
    [KEYPAD] Pressed: 1
@@ -429,3 +440,14 @@ Lệnh build chỉ tạo firmware; thao tác flash luôn cần chọn đúng pro
    ```
 
 Trong warm-up không có dòng trạng thái PIR định kỳ. Sau đó, `READY` là đang chờ; `ACTIVE` là đã xác nhận chuyển động; `BLOCKING` là chân OUT đã LOW nhưng trạng thái lọc vẫn ON trong 1,0 giây. Không mở đồng thời COM bằng hai phần mềm vì một ứng dụng sẽ giữ độc quyền cổng UART.
+
+File `LOG.TXT` trên thẻ dùng định dạng sau; `seq` giúp nhận biết record trùng nếu
+thẻ lỗi đúng lúc `f_sync/close` khiến firmware phải thử ghi lại:
+
+```text
+[#000001][412ms] ========== NEW BOOT SESSION ==========
+[#000002][412ms] BOOT reset_cause=POWER_ON_RESET
+[#000003][412ms] FW version=2.3 fsm=7-state dual-pin log=physical-sync
+[#000004][413ms] SD_INIT status=ONLINE
+[#000005][1418ms] FSM Initialized: STATE_DISARM | D=CLOSED P=WARMUP V=NONE E=NONE
+```
