@@ -171,7 +171,7 @@ static uint32_t FSM_RemainingSeconds(uint32_t now, uint32_t duration_ms)
 /* ==================================================================== */
 /*                         KHỞI TẠO HỆ THỐNG FSM                        */
 /* ==================================================================== */
-void FSM_Init(void)
+void FSM_Init(bool door_open)
 {
     currentState = STATE_DISARM;
     state_start_tick = HAL_GetTick();
@@ -191,6 +191,14 @@ void FSM_Init(void)
     key_beep_deadline = 0U;
     cooldown_output_on = true;
     cooldown_toggle_tick = state_start_tick;
+
+    /* Seed the initial log before FSM_Process receives its first snapshot.
+       Door is sampled at startup; PIR has not been processed and vibration
+       has no classified window yet. Do not reuse stale logging fields. */
+    log_door_open = door_open;
+    log_pir_ready = false;
+    log_pir_motion = false;
+    log_vib_level = VIB_NONE;
 
     Buzzer_Init();
     Buzzer_SetState(false);

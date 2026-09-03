@@ -40,7 +40,8 @@ typedef enum {
 /* ==================================================================== */
 /*                             HÀM API FSM                              */
 /* ==================================================================== */
-void FSM_Init(void);
+/* door_open is a boot-time GPIO snapshot for the first log record only. */
+void FSM_Init(bool door_open);
 void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
                  bool pir_motion, VibLevel_t vib_level);
 SystemState_t FSM_GetState(void);

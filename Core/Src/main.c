@@ -47,9 +47,9 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define PIR_WARMUP_MS         30000   /* Thời gian khởi động cảm biến PIR (30 giây) */
-#define REED_DEBOUNCE_MS      50      /* Chống dội tiếp điểm từ cửa (50ms) */
+#define REED_DEBOUNCE_MS      50      /* Xác nhận mức cửa Hall KY-003; tên REED giữ tương thích */
 #define PIR_STABLE_MS         1400U    /* Mức OUT phải ổn định trước khi chấp nhận */
-#define PIR_BLOCKING_MS       1000U   /* HC-SR501: giữ ON qua khoảng khóa sau xung */
+#define PIR_BLOCKING_MS       1000U   /* Giữ ON phần mềm sau LOW đã lọc; không đo khóa phần cứng */
 #define PIR_REPORT_MS         1000U   /* Chu kỳ báo trạng thái PIR qua UART */
 /* USER CODE END PD */
 
@@ -84,7 +84,9 @@ static volatile uint8_t reed_debounce_pending = 0;
 static volatile uint32_t reed_edge_tick = 0;
 uint8_t was_reed_triggered = 0; /* Lưu trạng thái cửa ở chu kỳ trước */
 
-/* HC-SR501: lọc mức OUT và bám blocking time hoàn toàn không chặn main loop. */
+/* HC-SR501: polling OUT, lọc hai mức và giữ ON bằng tick, không chờ tại đây.
+   Module thực tế dùng jumper H, nguồn ngoài 3.3 V vào VCC; xem README.
+   Các tác vụ I/O khác trong main vẫn có thể làm gián đoạn việc lấy mẫu. */
 uint8_t pir_triggered = 0;
 uint8_t was_pir_triggered = 0;
 static uint8_t pir_ready = 0;
@@ -150,7 +152,7 @@ void SystemClock_Config(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 /**
-  * @brief  EXTI line detection callbacks for SW-420, Reed switch, PIR.
+  * @brief  EXTI callbacks for SW-420 and Hall KY-003; PIR is polled in main.
   */
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
@@ -161,7 +163,8 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
   {
     Sensors_Vib_EXTI_Callback();
   }
-  /* 2. Cảm biến Từ Cửa Reed: Chống dội tiếp điểm cơ khí 50ms */
+  /* 2. Hall KY-003: ghi nhận cạnh để xác nhận mức cửa sau 50ms.
+     REED_IN và reed_* là tên lịch sử, không còn chỉ tiếp điểm reed. */
   else if (GPIO_Pin == REED_IN_Pin)
   {
     reed_edge_tick = now;
@@ -301,7 +304,7 @@ int main(void)
   /* Khởi tạo bàn phím ma trận Keypad 4x4 */
   Keypad_Init();
 
-  /* Đọc trạng thái ban đầu của Cửa (Reed Switch) khi vừa cấp nguồn */
+  /* Đọc trạng thái ban đầu của cửa Hall KY-003 khi vừa cấp nguồn. */
   reed_triggered = (HAL_GPIO_ReadPin(REED_IN_GPIO_Port, REED_IN_Pin) == GPIO_PIN_SET) ? 1 : 0;
   was_reed_triggered = reed_triggered;
 
@@ -408,8 +411,11 @@ int main(void)
   if (oled_ready && splash_elapsed < 1000U)
     HAL_Delay(1000U - splash_elapsed);
 
-  /* Khởi tạo FSM 7 trạng thái; ALARM và COOLDOWN được tách riêng. */
-  FSM_Init();
+  /* Sample Hall again after SD discovery/splash for the boot log only.
+     Preserve the existing debounced door state and pending EXTI events. */
+  bool boot_door_open =
+      HAL_GPIO_ReadPin(REED_IN_GPIO_Port, REED_IN_Pin) == GPIO_PIN_SET;
+  FSM_Init(boot_door_open);
 
   Watchdog_Refresh();
   /* USER CODE END 2 */
