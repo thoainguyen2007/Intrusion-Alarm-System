@@ -8,7 +8,7 @@ static uint32_t last_vib_pulse_tick = 0;
 static VibLevel_t lastVibLevel = VIB_NONE;
 
 /**
- * @brief Tăng biến đếm xung khi có ngắt từ SW-420 (đã lọc nhiễu dội tối thiểu 5ms)
+ * @brief Đếm cạnh SW-420 cách cạnh đã nhận ít nhất VIB_GLITCH_FILTER_MS (8ms).
  */
 void Sensors_Vib_EXTI_Callback(void)
 {
