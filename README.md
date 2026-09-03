@@ -9,6 +9,21 @@ kiện MicroSD có khả năng phục hồi sau khi tháo/lỗi thẻ.
 > Arm Embedded Toolchain và đã được verify trên STM32F103C8T6 qua ST-Link V2.
 > Artifact chuẩn được sinh cục bộ trong `build/Debug/` và không lưu vào Git.
 
+### Cấu hình thực tế đã chốt (03/09/2026)
+
+- **Cửa:** Hall KY-003 thay reed switch; giữ nguyên PA0, logic LOW = đóng / HIGH = mở và bộ lọc 50 ms. Không thay đổi thuật toán cảm biến hoặc FSM.
+- **PIR:** HC-SR501, jumper **H**, **nguồn ngoài 3,3 V nối trực tiếp vào chân VCC trên header của module**, không cấp sau hoặc bypass bộ ổn áp; giữ chung GND với STM32, OUT nối PA1. Người vận hành xác nhận cấu hình này đang ổn định trên module thực tế. Đây là ghi nhận của mô hình, không phải bảo đảm cấp 3,3 V phù hợp với mọi phiên bản HC-SR501.
+- **MicroSD:** người vận hành xác nhận lỗi khởi tạo vừa gặp do gắn chưa chắc; sau khi gắn lại, init, đọc sector, mount và ghi/sync nhật ký đều OK. Không thay driver SD để xử lý sự cố tiếp xúc này.
+- **Buzzer:** điều khiển qua transistor NPN **BC547**, tín hiệu PWM tại PA8. OLED SH1106 1,3 inch và các thiết bị còn lại giữ cấu hình hiện hành.
+
+Các ghi nhận trên là kết quả vận hành của mô hình, không thay thế phép đo độ trễ hoặc chứng nhận độ ổn định dài hạn. Các test case bên dưới mô tả kết quả mong đợi, không mặc định tất cả đã được kiểm thử.
+
+**Phạm vi bản trình diễn đã thống nhất:** giữ UART in từng phím để trình chiếu;
+khi nhập quá bốn chữ số, firmware dùng bốn chữ số đầu và bỏ qua phần dư.
+Không đổi cơ chế FSM, timer, cửa sổ rung, OLED hoặc script nạp vì các hành vi này.
+CI, test tự động và đo độ trễ/độ bền chưa thuộc phạm vi hoàn thiện hiện tại.
+`.ioc` đồng bộ pull-down PA1 và pull-up PA2 với firmware; tên kênh và EXTI giữ nguyên.
+
 > **Tên đề tài tiếng Anh:** STM32F103 Intrusion Alarm System with Multi-Sensor FSM
 >
 > **Tên đề tài tiếng Việt:** Hệ thống Báo động Xâm nhập Đa cảm biến dùng FSM trên STM32F103
@@ -38,8 +53,8 @@ kiện MicroSD có khả năng phục hồi sau khi tháo/lỗi thẻ.
 
 Hệ thống Báo động Xâm nhập là một giải pháp an ninh nhúng thời gian thực (Real-time Embedded Security System) được xây dựng trên vi điều khiển STM32F103C8T6. Hệ thống tích hợp đa cảm biến đầu vào nhằm bảo vệ toàn diện ngôi nhà/văn phòng chống lại các hành vi đột nhập trái phép:
 
-* **KY-003 Mạch Cảm Biến Từ Trường (Hall Effect Sensor):** Giám sát trạng thái đóng/mở của cửa ra vào tức thì qua ngắt EXTI bằng hiệu ứng Hall khi nam châm gắn trên cửa lại gần hoặc rời xa.
-* **Cảm biến Rung (SW-420):** Thuật toán đếm xung trong cửa sổ trượt $1.0\text{s}$ để phân biệt rung nhẹ do gió/va quẹt với hành vi đập phá, dùng xà beng cạy cửa.
+* **Cảm biến cửa Hall KY-003:** Giám sát đóng/mở qua ngắt EXTI hai cạnh và bộ lọc ổn định 50 ms khi nam châm lại gần hoặc rời xa.
+* **Cảm biến Rung (SW-420):** Đếm xung trong các cửa sổ tích lũy khoảng $1.0\text{s}$ không chồng lấn, phân loại NONE/LIGHT/HEAVY theo ngưỡng thực nghiệm; không đo lực hoặc xác định chắc chắn hành vi đập phá.
 * **Cảm biến Thân nhiệt Chuyển động (PIR HC-SR501):** Phát hiện kẻ gian di chuyển trong vùng quét an ninh.
 * **Bàn phím ma trận 4x4 (Keypad):** Nhập mã PIN bảo mật để Arm / Disarm / Bỏ qua cảnh báo.
 * **Màn hình OLED SH1106 1.3 inch, 128x64 (I2C):** Địa chỉ 7-bit `0x3C` (`0x78` theo định dạng địa chỉ HAL), hiển thị trạng thái, đếm ngược, cấp độ rung và hướng dẫn người dùng.
@@ -55,7 +70,7 @@ tối đa 30 giây; cảnh báo sớm tự hủy khi PIR duy trì `READY` liên 
 Nhật ký SD dùng hàng đợi RAM 32 sự kiện. Mỗi record có số thứ tự tăng dần trong
 phiên, timestamp `HAL_GetTick()` và snapshot cảm biến. Khi thẻ đang online,
 logger ghi tối đa một record mỗi 100 ms bằng chuỗi `open → seek cuối file → write
-→ f_sync → close`; chỉ khi `f_sync` thành công record mới được lấy khỏi queue.
+→ f_sync → close`; chỉ khi ghi đủ dữ liệu, `f_sync` và `close` thành công record mới được lấy khỏi queue.
 Như vậy mọi chuyển trạng thái, kể cả `ALARM_EMERGE` và `ALARM_COOLDOWN`, đều được
 đẩy xuống vật lý thay vì chờ hệ thống quay lại `DISARM`.
 
@@ -74,6 +89,12 @@ Mọi chuyển trạng thái ghi kèm một snapshot nhất quán: `D` (cửa), 
 UART để tránh làm đầy file và tăng số lần ghi thẻ. Logger cũng ghi sự kiện thẻ
 offline/online và tổng số record đã phải bỏ khi queue từng bị đầy.
 
+Bản ghi `FSM Initialized` lấy `D` từ PA0 ngay trước khi khởi tạo FSM, sau dò SD
+và splash, không mặc định cửa đóng. Đây là mẫu GPIO khởi động, chưa phải kết quả
+bộ lọc 50 ms; mẫu này không thay đổi trạng thái cửa dùng cho điều khiển. `P=WARMUP`
+và `V=NONE` lúc đó là trạng thái phần mềm ban đầu (chưa xử lý PIR/chưa phân loại
+cửa sổ rung), không phải khẳng định môi trường không có chuyển động/rung.
+
 Independent watchdog dùng LSI, prescaler 256 và reload 4095, cho timeout danh định
 khoảng 26,2 giây (thực tế phụ thuộc sai số LSI). Watchdog được bật trước khi dò
 thẻ SD, được refresh trước các thao tác SD khởi động có giới hạn và ở cuối mỗi
@@ -89,7 +110,7 @@ Toàn bộ sơ đồ chân được cấu hình chuẩn trên STM32F103C8T6:
 | Khối Chức Năng                 | Linh Kiện                               | Chân STM32                                      | Chế Độ Cấu Hình (GPIO/Peripheral)                                                | Chức Năng Chi Tiết                                                                            |
 | :-------------------------------- | :--------------------------------------- | :----------------------------------------------- | :------------------------------------------------------------------------------------ | :----------------------------------------------------------------------------------------------- |
 | **Cảm Biến Cửa**         | KY-003 Mạch Cảm Biến Từ Trường (Hall Sensor) | **`PA0`**                                | `GPIO_EXTI0` (Pull-up, 2 sườn ngắt)                                              | Đóng cửa (có từ trường) = 0V (LOW), Mở cửa (mất từ trường) = 3.3V (HIGH)             |
-| **Cảm Biến Thân Nhiệt** | Cảm biến chuyển động PIR (HC-SR501) | **`PA1`**                                | Pull-down;`.ioc` giữ `EXTI1` sườn lên, firmware lấy mẫu hai mức trong main | OUT mức HIGH khi phát hiện (VCC = 5V, jumper**H**)                                      |
+| **Cảm Biến Thân Nhiệt** | Cảm biến chuyển động PIR (HC-SR501) | **`PA1`** | Pull-down trong firmware; EXTI1 sườn lên còn được cấu hình nhưng PIR được xử lý bằng polling | Jumper **H**, nguồn ngoài **3,3 V → VCC module**, GND chung; xem lưu ý nguồn ở đầu tài liệu |
 | **Cảm Biến Rung**         | Module rung SW-420                       | **`PA2`**                                | `GPIO_EXTI2` (Pull-up, Sườn xuống)                                               | Thu thập xung rung chấn động đập/cạy cửa                                                 |
 | **Thẻ Nhớ (CS)**          | Module MicroSD SPI                       | **`PA4`**                                | `GPIO_Output_PP`, không pull, mặc định HIGH                                     | Chip Select (CS) điều khiển giao tiếp thẻ nhớ                                              |
 | **Thẻ Nhớ (SCK)**         | Module MicroSD SPI                       | **`PA5`**                                | `SPI1_SCK`, master                                                                  | Khoảng 281 kHz lúc khởi tạo; chuyển lên khoảng 9 MHz sau khi thẻ sẵn sàng              |
@@ -116,14 +137,16 @@ Module dạng Catalex có AMS1117-3.3 phải được cấp vào chân `VCC` b�
 đã đo xác nhận; không cấp 3.3 V qua AMS1117 và không dùng chân `5VIN` chưa xác
 minh là ngõ ra. Chi tiết đo kiểm và chẩn đoán nằm trong [`moduleSD.md`](moduleSD.md).
 
-Module KY-003 Mạch Cảm Biến Từ Trường gồm 3 chân kết nối: chân tín hiệu (S) nối vào `PA0` (`GPIO_EXTI0` cấu hình Pull-up nội), chân giữa (VCC) nối nguồn `3.3V` hoặc `5V`, và chân (-) nối `GND` chung STM32. Khi cửa đóng (nam châm gắn trên cánh cửa áp sát cảm biến Hall), chân S dẫn thông xuống GND kéo mức logic về LOW (0V). Khi cửa mở (nam châm tách xa cảm biến), chân S ngắt và được điện trở kéo lên mức HIGH (3.3V). Bộ lọc chống dội $50\text{ms}$ (`REED_DEBOUNCE_MS = 50`) loại trừ hoàn toàn các xung nhiễu cơ học/rung cánh cửa lúc chạm nam châm.
+KY-003 dùng chân tín hiệu `S` nối `PA0`, GND chung với STM32; giữ nguồn và hướng nam châm của bộ phần cứng đã thử thành công. Khi lắp lại phải đối chiếu nhãn chân và điện áp tín hiệu của đúng module, không suy đoán pinout hay đổi nguồn tùy ý. Logic đang dùng: cửa đóng = LOW, cửa mở = HIGH. Bộ lọc 50 ms xác nhận mức cửa sau khoảng không có cạnh mới; đây không phải tuyên bố loại bỏ mọi nhiễu.
 
-PA8 phát PWM 2 kHz, duty xấp xỉ 50% cho passive buzzer nhỏ hoặc tầng driver.
+Hall thay tiếp điểm reed nhằm khắc phục các vấn đề tiếp điểm/cơ khí và hành vi từ tính mà nhóm gặp ở mô hình cũ. Hall vẫn là cảm biến từ trường; việc thay thế không có nghĩa miễn nhiễm nam châm ngoài. Các tên `REED_IN`, `REED_DEBOUNCE_MS`, `reed_*` và `Reed_ProcessDebounce` trong code/`.ioc` là tên lịch sử cho **kênh cửa KY-003 hiện tại**; được giữ nguyên để tránh thay đổi firmware không cần thiết.
+
+PA8 phát PWM 2 kHz, duty xấp xỉ 50% tới tầng driver NPN BC547 đang dùng; không đấu tải còi trực tiếp vào GPIO khi lắp lại.
 Keypad dùng beep 40 ms không blocking; beep bị vô hiệu trong `ENTRY_DELAY` và
 `ALARM_EMERGE` để không can thiệp nhịp cảnh báo/còi hú. LED PC13
 active-low được điều khiển theo pha thời gian của từng state; `TEMP_DISARM` dùng
 hai chớp ngắn mỗi giây. `ALARM_EMERGE` giữ còi liên tục, còn `ALARM_COOLDOWN` đồng bộ
-LED và buzzer theo nhịp giảm dần trong 30 giây.
+LED và buzzer theo nhịp chậm dần trong 30 giây; không giảm liên tục biên độ PWM hoặc độ sáng LED.
 
 ---
 
@@ -194,11 +217,11 @@ flowchart TD
 
 ### 3.2. Bảng Chân Trị Hợp Nhất 8 Tổ Hợp Cảm Biến Nhị Phân (Truth Table 2³ = 8)
 
-Bảng chân trị chuẩn mô tả phản ứng của hệ thống đối với $2^3 = 8$ tổ hợp cảm biến nhị phân đầu vào: **Cửa ($D$)**, **PIR ($P$)**, **Rung ($V$)** trên từng trạng thái bảo vệ:
+Bảng dưới là cách trình bày rút gọn 8 tổ hợp: rung thực tế có ba mức, nên LIGHT và HEAVY vẫn phải được phân biệt trong từng ô. Bảng không thay thế thứ tự ưu tiên, warm-up và các timer của FSM.
 
 * **Quy ước mức logic:**
   * $D$ (Door - Cảm biến KY-003): `0` = Đóng (Nam châm áp sát KY-003), `1` = Mở (Nam châm rời xa KY-003)
-  * $P$ (PIR): `0` = Yên tĩnh (OFF), `1` = Có thân nhiệt chuyển động (ACTIVE)
+  * $P$ (PIR): `0` = filtered OFF, `1` = filtered ON (gồm ACTIVE và BLOCKING); không phải phép xác nhận có/không có người. Tự re-arm còn yêu cầu đã hết warm-up.
   * $V$ (Vibration): `0` = Yên tĩnh (`NONE`), `1` = Có rung chấn (`LIGHT` hoặc `HEAVY`)
 
 |     STT     |      $D$      |      $P$      |      $V$      | Tình Trạng Cảm Biến Thực Tế       | Hành Vi Khi Đang `ARMED`                                                                                 | Hành Vi Khi `ENTRY_DELAY` (30s)                                                                          | Hành Vi Khi `TEMP_DISARM` (60s)              |
@@ -212,7 +235,11 @@ Bảng chân trị chuẩn mô tả phản ứng của hệ thống đối với
 | **6**       | **`1`**         | **`1`**         | **`0`**         | Cửa mở + có người bước vào      | Kích hoạt ngay **`ALARM_EMERGE`**                                                                        | Kích hoạt ngay **`ALARM_EMERGE`**                                                                        | Cảnh báo 15s cuối $\to$ Hết 60s `ALARM`      |
 | **7**       | **`1`**         | **`1`**         | **`1`**         | Cửa mở + người + rung đập phá    | Kích hoạt ngay **`ALARM_EMERGE`**                                                                        | Kích hoạt ngay **`ALARM_EMERGE`**                                                                        | Cảnh báo 15s cuối $\to$ Hết 60s `ALARM`      |
 
+Trong `ENTRY_DELAY`, HEAVY luôn chuyển ALARM, kể cả tổ hợp 3; chỉ LIGHT mới đặt lại bộ đếm rung. `TEMP_DISARM` kiểm tra cửa tại mốc hết 60s, không yêu cầu cửa đóng liên tục cả cửa sổ.
+
 #### Bảng Phản Ứng Tương Tác Bàn Phím (Mã PIN) & Timeout:
+
+Trong `ENTRY_DELAY`, thứ tự xử lý là HEAVY → cửa mở → đủ hai timer yên → timeout → PIN. Do đó các nhánh PIN bên dưới chỉ áp dụng nếu chưa có điều kiện ưu tiên trước đó. Đủ cả hai timer và timeout trong cùng vòng lặp thì nhánh tự re-arm được xét trước. Không có timeout riêng cho chuỗi PIN đang nhập.
 
 | Trạng Thái Hiện Tại                     | PIN ARM/RE-ARM (`1234#`)                                                                                     | PIN MASTER DISARM (`6789#`)                                                                                  | Khi Hết Thời Gian Timeout                                                            | Nhập Sai PIN     | Sau 5 Lần Nhập Sai                  |
 | :------------------------------------------ | :----------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------- | :---------------- | :------------------------------------ |
@@ -233,9 +260,9 @@ Bảng chân trị chuẩn mô tả phản ứng của hệ thống đối với
 | `REED_DEBOUNCE_MS`         |  `50`  |    ms    | Thời gian xác nhận tín hiệu cảm biến từ trường KY-003 ổn định sau ngắt `EXTI0`.                              |
 | `VIB_GLITCH_FILTER_MS`     |   `8`   |    ms    | Bộ lọc chống dội lò xo cơ học ngắt `EXTI2` của module rung SW-420.                                           |
 | `VIB_WINDOW_MS`            | `1000` |    ms    | Cửa sổ tích lũy xung rung (0-5: `NONE`, 6-19: `LIGHT`, $\ge 20$: `HEAVY`).                                   |
-| `PIR_WARMUP_MS`            | `30000` |    ms    | Thời gian làm ấm mắt cảm biến PIR HC-SR501 sau khi cấp nguồn (30 giây).                                       |
-| `PIR_STABLE_MS`            | `1400` |    ms    | Mức OUT của PIR phải giữ liên tục $\ge 1.4\text{s}$ mới xác nhận chuyển động thật.                          |
-| `PIR_BLOCKING_MS`          | `1000` |    ms    | Thời gian giữ ON trong phần mềm sau khi OUT hạ LOW trước khi công bố READY (1.0 giây).                        |
+| `PIR_WARMUP_MS` | `30000` | ms | Khoảng bỏ qua PIR tính từ tick khởi động MCU; không đo thời gian cấp nguồn riêng của module. |
+| `PIR_STABLE_MS` | `1400` | ms | Thời gian xác nhận mức HIGH hoặc LOW qua các lần lấy mẫu; không xác minh đó chắc chắn là chuyển động người. |
+| `PIR_BLOCKING_MS` | `1000` | ms | Giữ ON thêm sau khi LOW đã được xác nhận 1400 ms; không phải thời gian khóa phần cứng. |
 | `EXIT_DELAY_MS`            | `15000` |    ms    | Thời gian đếm lùi rời nhà để người dùng bước ra ngoài và đóng cửa (15 giây).                                  |
 | `ENTRY_DELAY_MS`           | `30000` |    ms    | Thời gian tối đa để xác thực PIN khi có cảnh báo sớm trước khi hú còi (30 giây).                               |
 | `ENTRY_PIR_READY_REARM_MS` | `10000` |    ms    | Thời gian PIR phải duy trì READY liên tục để tự hủy cảnh báo giả (10 giây).                                   |
@@ -269,15 +296,21 @@ Bảng chân trị chuẩn mô tả phản ứng của hệ thống đối với
 
 ---
 
+### TC13 — Nhật ký và phiên khởi động
+
+Với thẻ đã gắn chắc và mount OK, kiểm tra năm bản ghi khởi động được sync và queue về 0; thực hiện chuyển trạng thái rồi đối chiếu sự kiện trên UART với `LOG.TXT`. Reset MCU phải tạo phiên mới, sequence bắt đầu lại và giữ lịch sử phiên trước. Log khởi động hiện tại đã đạt phần init/mount/sync; không suy diễn rằng mọi kịch bản mất nguồn hoặc tháo thẻ lúc ghi đã được thử. Không rút thẻ hay cắt nguồn trong lúc ghi chỉ để hoàn thành test này.
+
+Điều kiện TC06: hết 30s và chưa đạt nhánh tự re-arm hoặc xác thực PIN ở chu kỳ trước. TC05a/TC05b chỉ áp dụng khi cửa đóng, không HEAVY và không có điều kiện chuyển state ưu tiên cao hơn.
+
 ## 5. THUẬT TOÁN XỬ LÝ TÍN HIỆU & HIỆU CHUẨN CẢM BIẾN
 
 ### 5.1. Cảm Biến Rung SW-420 (Module `sensors.c` & `sensors.h`)
 
-* **Bộ lọc chống dội cơ khí (Glitch Filter):** Ngắt `EXTI2` áp dụng bộ lọc $8\text{ms}$ (`VIB_GLITCH_FILTER_MS = 8`) để loại bỏ hoàn toàn hiện tượng rung lò xo nội tại.
-* **Cửa sổ trượt thời gian 1.0 giây (`VIB_WINDOW_MS = 1000`):** Đếm tổng số xung tích lũy trong 1 giây để phân loại:
+* **Bộ lọc xung gần nhau (Glitch Filter):** Ngắt `EXTI2` bỏ cạnh có khoảng cách dưới $8\text{ms}$ so với cạnh đã nhận (`VIB_GLITCH_FILTER_MS = 8`), nhằm hạn chế đếm dội.
+* **Cửa sổ tích lũy khoảng 1.0 giây (`VIB_WINDOW_MS = 1000`), không chồng lấn:** Đếm tổng số xung để phân loại:
   * **$0 - 5$ xung:** Nhiễu nền môi trường $\rightarrow$ Bỏ qua (`VIB_NONE`).
   * **$6 - 19$ xung:** Rung nhẹ do va quẹt, gõ cửa $\rightarrow$ **`VIB_LIGHT`**.
-  * **$\ge 20$ xung:** Chấn động đập phá, dùng búa/xà beng cạy cửa $\rightarrow$ **`VIB_HEAVY`**.
+  * **$\ge 20$ xung:** Mức rung mạnh theo ngưỡng đã chọn $\rightarrow$ **`VIB_HEAVY`**; không suy ra loại dụng cụ hoặc lực tác động.
 * **Quy trình Hiệu chuẩn (Calibration):**
   1. Mở `Core/Inc/sensors.h`, đặt `#define CALIBRATION_MODE 1`.
   2. Nạp code và mở UART Terminal (`115200 baud`).
@@ -287,25 +320,25 @@ Bảng chân trị chuẩn mô tả phản ứng của hệ thống đối với
 
 ### 5.2. KY-003 Mạch Cảm Biến Từ Trường (Hall Sensor) & Logic Ghép Nối (Coupling Logic)
 
-* **Nguyên lý hoạt động cảm biến Hall KY-003:** Module sử dụng cảm biến từ trường Hall IC 3144 nhận diện từ tính của nam châm vĩnh cửu gắn trên cửa.
+* **Cảm biến cửa hiện tại:** Hall KY-003 nhận trạng thái nam châm gắn trên cửa; không còn sử dụng reed switch trong mô hình. Không yêu cầu đổi code hoặc tăng bộ lọc.
   * **Khi cửa đóng:** Nam châm áp sát cảm biến Hall $\rightarrow$ Transistor bên trong dẫn bão hòa $\rightarrow$ Kéo chân tín hiệu `S` xuống mức **LOW (0V)**.
   * **Khi cửa mở:** Nam châm rời xa cảm biến $\rightarrow$ Transistor ngắt $\rightarrow$ Điện trở kéo lên nội của STM32 giữ chân tín hiệu `S` ở mức **HIGH (3.3V)**.
-* **Xử lý ngắt & Chống dội:** Ngắt `EXTI0` cấu hình bắt cả hai sườn (`GPIO_MODE_IT_RISING_FALLING`). Khi có ngắt, phần mềm áp dụng bộ đếm thời gian chống dội $50\text{ms}$ (`REED_DEBOUNCE_MS = 50`) để xác nhận tín hiệu đã đạt trạng thái ổn định trước khi cập nhật vào FSM, loại trừ các dao động cơ học khi cánh cửa sập mạnh.
+* **Xác nhận trạng thái cửa:** EXTI0 bắt hai cạnh. Sau 50 ms không có cạnh mới, firmware đọc PA0 và cập nhật trạng thái. Giữ nguyên `REED_DEBOUNCE_MS = 50` như tên lịch sử; Hall không có tiếp điểm reed để chống dội cơ khí.
 * **Logic thông minh kết hợp (Coupling Logic):**
   * **Cửa Đóng (`Door == 0`):** Tự động gọi `Vibration_Reset()` xóa sạch xung chấn động sinh ra lúc sập cửa $\rightarrow$ Bật chế độ giám sát rung.
   * **Cửa Mở (`Door == 1`):** Tạm thời ngắt phân tích rung để tránh hiện tượng gió lùa làm rung lắc cánh cửa mở gây báo động rung giả.
 
 ### 5.3. Cảm Biến Chuyển Động Thân Nhiệt PIR (HC-SR501)
 
-* **Thời gian warm-up 30s:** Trong 30 giây đầu tiên (`PIR_WARMUP_MS = 30000`), tín hiệu PIR chưa được đưa vào FSM.
-* **Lọc mức OUT (1.4s):** Firmware lấy mẫu cả HIGH và LOW; một mức chỉ được chấp nhận sau khi ổn định liên tục $1400\text{ms}$ (`PIR_STABLE_MS = 1400`), loại bỏ hoàn toàn các xung gai điện hoặc rung động nhỏ ngẫu nhiên.
-* **Bám blocking time (1.0s):** Khi OUT xuống LOW, trạng thái PIR duy trì ON thêm $1.0\text{s}$ (`PIR_BLOCKING_MS = 1000`) trước khi công bố OFF / READY, giúp giải phóng trạng thái kịp thời.
+* **Warm-up 30s từ tick khởi động MCU:** Trong khoảng này (`PIR_WARMUP_MS = 30000`), PIR chưa được dùng làm nguồn kích hoạt FSM. Reset riêng MCU không đồng nghĩa đã ngắt/cấp lại nguồn riêng của PIR.
+* **Lọc mức OUT (1.4s):** HIGH và LOW đều phải được quan sát ổn định 1400 ms trước khi đổi mức lọc. Đây là polling trong vòng lặp, không phải bảo đảm thu được mọi cạnh khi có I/O chặn.
+* **Giữ ON phần mềm (1.0s):** Sau khi LOW đã được xác nhận qua bộ lọc 1.4s, giữ ON thêm 1s rồi công bố OFF. Tổng độ trễ tắt khoảng 2.4s nếu LOW liên tục và vòng lặp chạy đều. `PIR_BLOCKING_MS` không phải phép đo hoặc điều khiển thời gian khóa bên trong HC-SR501.
 * **UART chẩn đoán 1 Hz:** Không in log PIR định kỳ trong warm-up. Sau khi warm-up hoàn tất, mỗi giây in `raw`, `filtered` và `phase` (`READY`, `ACTIVE`, `BLOCKING`) để phân biệt xung vật lý của module với tín hiệu đã đưa vào FSM.
-* **Cấu hình phần cứng bắt buộc:**
-  * Cắm Jumper trên module sang vị trí **`H`** (Repeatable Trigger) để tín hiệu OUT giữ mức HIGH liên tục khi có người di chuyển.
-  * Cấp nguồn VCC vào chân **`5V`** (không cắm 3.3V vì sẽ gây sụt áp IC ổn áp 7133).
+* **Cấu hình thực tế đã xác nhận:**
+  * Jumper **H**: module có thể kéo dài HIGH khi nhận thêm kích thích trong thời gian giữ. Firmware không đọc jumper; HIGH không đồng nghĩa người còn hiện diện, LOW không chứng minh không có người.
+  * Nguồn ngoài **3,3 V nối chân VCC trên header module**, GND chung với STM32, OUT nối PA1. Người vận hành xác nhận PIR đang ổn định với cách cấp này; không cấp sau bộ ổn áp và không yêu cầu sửa mạch. Giữ cấu hình đã thử, không mặc định áp dụng cho module khác khi chưa kiểm chứng.
   * Bắt đầu với *Sensitivity* gần `MIN`, sau đó tăng từng bước nhỏ đến vùng quét cần thiết; không suy đoán chiều xoay nếu PCB không in `MIN/MAX` vì có nhiều phiên bản module.
-  * Chỉnh *Time Delay* về gần `MIN` để OUT hạ LOW nhanh sau 2–3 giây khi hết chuyển động.
+  * Vị trí chính xác hai biến trở và thời gian HIGH chưa được đo/ghi nhận; không mặc định xung luôn dài 2–3s. Không yêu cầu chỉnh lại các núm của bộ phần cứng đang chạy ổn.
 * **Giới hạn hiện tại:** Bộ lọc 1400 ms loại các xung HIGH quá ngắn dưới 1.4 giây. Nếu UART thỉnh thoảng hiện `raw=HIGH` nhưng `filtered=OFF`, đó là xung chưa đủ thời gian xác nhận, không phải FSM tự đảo trạng thái.
 
 ---
@@ -336,7 +369,7 @@ Intrusion-Alarm-System/
 │   │   ├── gpio.h, usart.h...  # Khai báo cấu hình ngoại vi HAL
 │   ├── Src/                    # Các file mã nguồn thực thi (.c)
 │   │   ├── main.c              # Chương trình chính & Vòng lặp tác vụ
-│   │   ├── fsm.c               # Hiện thực 6-State FSM, Buzzer PWM & OLED UI
+│   │   ├── fsm.c               # Hiện thực 7-State FSM, Buzzer PWM & OLED UI
 │   │   ├── sensors.c           # Hiện thực xử lý xung rung & lọc nhiễu
 │   │   ├── sd_spi.c            # Driver block MicroSD SPI và đọc CSD
 │   │   ├── sd_logger.c         # Queue nhật ký, ghi FatFs và phục hồi thẻ
@@ -439,7 +472,7 @@ Lệnh build chỉ tạo firmware; thao tác flash luôn cần chọn đúng pro
    [PIR] raw=LOW filtered=OFF phase=READY
    ```
 
-Trong warm-up không có dòng trạng thái PIR định kỳ. Sau đó, `READY` là đang chờ; `ACTIVE` là đã xác nhận chuyển động; `BLOCKING` là chân OUT đã LOW nhưng trạng thái lọc vẫn ON trong 1,0 giây. Không mở đồng thời COM bằng hai phần mềm vì một ứng dụng sẽ giữ độc quyền cổng UART.
+Trong warm-up không có dòng trạng thái PIR định kỳ. Sau đó, `READY` là filtered OFF (raw vẫn có thể HIGH đang chờ xác nhận); `ACTIVE` là filtered ON trước giai đoạn giữ LOW; `BLOCKING` là LOW đã qua bộ lọc 1.4s nhưng phần mềm còn giữ ON thêm 1s. Các phase này là trạng thái phần mềm, không phải phase đọc từ module. UART khoảng 1 Hz không dùng để đo chính xác độ rộng xung. Không mở đồng thời COM bằng hai phần mềm vì một ứng dụng sẽ giữ độc quyền cổng UART.
 
 File `LOG.TXT` trên thẻ dùng định dạng sau; `seq` giúp nhận biết record trùng nếu
 thẻ lỗi đúng lúc `f_sync/close` khiến firmware phải thử ghi lại:

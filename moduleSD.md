@@ -318,6 +318,8 @@ Phân loại nhanh:
 
 ## 10. Trạng thái xác nhận
 
+Cập nhật 03/09/2026: MicroSD đã tích hợp trên STM32 với firmware 2.3. Người vận hành xác nhận sự cố `CMD0 failed` vừa gặp do gắn chưa chắc; sau khi gắn lại, hệ thống hoạt động bình thường mà không sửa driver. Các chẩn đoán nguồn/tiếp xúc ở trên được giữ như lịch sử nghiên cứu, không phải lỗi đang còn mở của mô hình hiện tại.
+
 | Hạng mục | Trạng thái |
 |---|---|
 | Pinout module | Đã xác nhận |
@@ -328,4 +330,18 @@ Phân loại nhanh:
 | FAT filesystem | Đã tạo và mount thành công |
 | Ghi file | Đã chạy thành công |
 | Đọc lại file | Đã chạy thành công |
-| Tích hợp FatFs STM32 | Bước tiếp theo của branch `setupmicroSD` |
+| Tích hợp FatFs STM32 | Đã tích hợp trên main: init, đọc sector 0, mount và ghi/sync LOG.TXT thành công |
+
+Log vận hành STM32 do người dùng cung cấp:
+
+```text
+[SD] Init: OK (R1=0x00)
+[SD] Type: SDHC/SDXC, OCR=0xC0FF8000
+[SD] Read sector 0: OK
+[SD] First bytes: 00 00 00 00, signature: 55 AA
+[FATFS] Mount: OK (FR=0)
+[FATFS] Capacity: 15343600 KiB, free: 15343432 KiB
+[FATFS] Physical sync LOG.TXT: OK (seq=5, 83 bytes), queued=0
+```
+
+Năm bản ghi khởi động đã được ghi/sync, hàng đợi hết dữ liệu. Đây là xác nhận vận hành, không phải kiểm thử mất nguồn giữa lúc ghi. Firmware hiện khởi tạo khoảng 281.25 kHz rồi dùng khoảng 9 MHz; kết quả thử 400 kHz trên ESP32-S3 trong mục 6 là lịch sử đối chứng, không phải tốc độ runtime STM32.
