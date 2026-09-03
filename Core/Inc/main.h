@@ -59,6 +59,7 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 #define LED_STATUS_Pin GPIO_PIN_13
 #define LED_STATUS_GPIO_Port GPIOC
+/* REED_IN is the legacy label for the KY-003 Hall door input on PA0. */
 #define REED_IN_Pin GPIO_PIN_0
 #define REED_IN_GPIO_Port GPIOA
 #define REED_IN_EXTI_IRQn EXTI0_IRQn

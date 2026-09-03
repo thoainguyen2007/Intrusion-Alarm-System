@@ -55,7 +55,7 @@ Hệ thống Báo động Xâm nhập là một giải pháp an ninh nhúng th�
 
 * **Cảm biến cửa Hall KY-003:** Giám sát đóng/mở qua ngắt EXTI hai cạnh và bộ lọc ổn định 50 ms khi nam châm lại gần hoặc rời xa.
 * **Cảm biến Rung (SW-420):** Đếm xung trong các cửa sổ tích lũy khoảng $1.0\text{s}$ không chồng lấn, phân loại NONE/LIGHT/HEAVY theo ngưỡng thực nghiệm; không đo lực hoặc xác định chắc chắn hành vi đập phá.
-* **Cảm biến Thân nhiệt Chuyển động (PIR HC-SR501):** Phát hiện kẻ gian di chuyển trong vùng quét an ninh.
+* **Cảm biến chuyển động hồng ngoại thụ động (PIR HC-SR501):** Cung cấp tín hiệu chuyển động cho FSM xác minh; không nhận diện người hoặc phân biệt chủ nhà với người lạ.
 * **Bàn phím ma trận 4x4 (Keypad):** Nhập mã PIN bảo mật để Arm / Disarm / Bỏ qua cảnh báo.
 * **Màn hình OLED SH1106 1.3 inch, 128x64 (I2C):** Địa chỉ 7-bit `0x3C` (`0x78` theo định dạng địa chỉ HAL), hiển thị trạng thái, đếm ngược, cấp độ rung và hướng dẫn người dùng.
 * **Còi Báo động (Buzzer):** Phát âm thanh cảnh báo ngắt quãng hoặc còi hú khẩn cấp.
@@ -328,7 +328,7 @@ Với thẻ đã gắn chắc và mount OK, kiểm tra năm bản ghi khởi đ�
   * **Cửa Đóng (`Door == 0`):** Tự động gọi `Vibration_Reset()` xóa sạch xung chấn động sinh ra lúc sập cửa $\rightarrow$ Bật chế độ giám sát rung.
   * **Cửa Mở (`Door == 1`):** Tạm thời ngắt phân tích rung để tránh hiện tượng gió lùa làm rung lắc cánh cửa mở gây báo động rung giả.
 
-### 5.3. Cảm Biến Chuyển Động Thân Nhiệt PIR (HC-SR501)
+### 5.3. Cảm Biến Chuyển Động Hồng Ngoại Thụ Động PIR (HC-SR501)
 
 * **Warm-up 30s từ tick khởi động MCU:** Trong khoảng này (`PIR_WARMUP_MS = 30000`), PIR chưa được dùng làm nguồn kích hoạt FSM. Reset riêng MCU không đồng nghĩa đã ngắt/cấp lại nguồn riêng của PIR.
 * **Lọc mức OUT (1.4s):** HIGH và LOW đều phải được quan sát ổn định 1400 ms trước khi đổi mức lọc. Đây là polling trong vòng lặp, không phải bảo đảm thu được mọi cạnh khi có I/O chặn.

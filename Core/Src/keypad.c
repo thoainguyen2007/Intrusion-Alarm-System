@@ -1,7 +1,7 @@
 /**
   ******************************************************************************
   * @file    keypad.c
-  * @brief   4x4 Matrix Keypad Driver with debounce & release timeout.
+  * @brief   4x4 keypad polling with 20 ms debounce and press-change reporting.
   ******************************************************************************
   */
 

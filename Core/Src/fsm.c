@@ -706,10 +706,11 @@ void FSM_Process(char key_pressed, bool door_open, bool pir_ready,
     }
 
     /*
-     * Thứ tự ưu tiên:
-     * 1) Cảm biến an ninh và timeout.
-     * 2) PIN chỉ được xét sau khi chu kỳ hiện tại vượt qua lớp an ninh.
-     * 3) Ghi nhận PIN sai sau cùng để không che mất sự kiện an ninh.
+     * Priority is state-specific:
+     * ENTRY_DELAY: heavy vibration, open door, quiet timers, timeout, then PIN.
+     * EXIT_DELAY: valid PIN branches precede the exit timeout.
+     * ALARM: a closed door is required for either valid PIN action.
+     * Wrong submissions are handled last, only if the state did not change.
      */
     SystemState_t state_before_events = currentState;
     switch (currentState)

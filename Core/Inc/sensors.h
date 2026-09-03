@@ -10,9 +10,9 @@
 
 #define VIB_NOISE_MAX 5 /* 0-5: nhiễu nền */
 #define VIB_LIGHT_MIN 6 /* 6-19: rung nhẹ */
-#define VIB_HEAVY_MIN 20 /* giữ nguyên, đã hợp lý */
-#define VIB_WINDOW_MS 1000
-#define VIB_GLITCH_FILTER_MS 8 /* đủ lọc dội lò xo cơ khí thật (5-15ms) */
+#define VIB_HEAVY_MIN 20 /* >=20 accepted pulses per window: HEAVY */
+#define VIB_WINDOW_MS 1000 /* Nominal accumulation interval; not a sliding window */
+#define VIB_GLITCH_FILTER_MS 8 /* Minimum spacing between accepted EXTI edges */
 
 typedef enum { VIB_NONE = 0, VIB_LIGHT, VIB_HEAVY } VibLevel_t;
 
